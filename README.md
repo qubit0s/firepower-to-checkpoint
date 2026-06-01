@@ -54,7 +54,7 @@ firepower-to-checkpoint/
 ├── 1_setup.sh                   # one-time setup (venv + deps + collection)
 ├── 2_parse.sh                   # ./2_parse.sh <config>  -> vars/*.yml
 ├── 3_apply.sh                   # ./3_apply.sh [stage] [ansible-args]
-├── requirements.txt           # python: ciscoconfparse2, PyYAML, ansible-core
+├── requirements.txt           # python: ciscoconfparse2, PyYAML, ansible-dev-tools
 └── requirements.yml           # ansible: check_point.mgmt
 ```
 
@@ -156,12 +156,16 @@ vars file so the dependency exists before the group/rule that uses it.
 
 The repo is kept lint-clean. To check:
 
+After `1_setup.sh`, the venv already has `yamllint` and `ansible-lint` (bundled in
+`ansible-dev-tools`); only `ruff` and `shellcheck` are extra.
+
 ```bash
-pip install ruff yamllint ansible-lint        # dev tools (one-time)
+source .venv/bin/activate
+pip install ruff                                # only extra Python linter needed
 ruff check parser/                              # Python (or: pyflakes + pycodestyle)
 yamllint .                                      # YAML (uses .yamllint in repo)
 ansible-lint playbooks/                         # Ansible (production profile)
-shellcheck *.sh                                 # shell wrappers
+shellcheck *.sh                                 # shell wrappers (install separately)
 ```
 
 Current status: `ruff`/`pyflakes`/`pycodestyle`, `yamllint`, and `ansible-lint` (production

@@ -18,7 +18,7 @@ echo "==> 1/4  Creating virtualenv ($VENV)"
 source "$VENV/bin/activate"
 pip install --quiet --upgrade pip
 
-echo "==> 2/4  Installing Python dependencies (ciscoconfparse2, PyYAML, ansible-core)"
+echo "==> 2/4  Installing Python dependencies (ciscoconfparse2, PyYAML, ansible-dev-tools)"
 pip install --quiet -r requirements.txt
 
 echo "==> 3/4  Installing the check_point.mgmt Ansible collection"
