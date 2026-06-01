@@ -1,0 +1,104 @@
+: Saved
+: Serial Number: JAD12345678
+: Hardware:   FPR-2110, 8192 MB RAM, CPU MIPS 1200 MHz
+:
+NGFW Version 7.2.11
+!
+hostname firepower2110
+!
+! ---------------------------------------------------------------------
+! Network objects  (object network ...)
+! ---------------------------------------------------------------------
+object network HOST_web01
+ host 10.10.10.11
+ description Internal web server 01
+object network HOST_app01
+ host 10.10.20.21
+object network NET_internal
+ subnet 10.10.0.0 255.255.0.0
+object network NET_dmz
+ subnet 192.168.50.0 255.255.255.0
+object network RANGE_dhcp
+ range 10.10.30.50 10.10.30.99
+object network FQDN_updates
+ fqdn dynamic updates.vendor.example.com
+object network HOST_web01_public
+ host 203.0.113.11
+object network NAT_pool_outside
+ range 203.0.113.100 203.0.113.120
+!
+! ---------------------------------------------------------------------
+! Service objects  (object service ...)
+! ---------------------------------------------------------------------
+object service SVC_tcp_8080
+ service tcp destination eq 8080
+object service SVC_udp_1812
+ service udp destination eq 1812
+object service SVC_https_alt
+ service tcp destination eq 8443
+!
+! ---------------------------------------------------------------------
+! Network object-groups
+! ---------------------------------------------------------------------
+object-group network GRP_web_servers
+ network-object object HOST_web01
+ network-object host 10.10.10.12
+ description All internal web servers
+object-group network GRP_internal_nets
+ network-object 10.10.0.0 255.255.0.0
+ network-object object NET_dmz
+object-group network GRP_all_servers
+ group-object GRP_web_servers
+ network-object object HOST_app01
+!
+! ---------------------------------------------------------------------
+! Service object-groups
+! ---------------------------------------------------------------------
+object-group service GRP_web_ports tcp
+ port-object eq www
+ port-object eq https
+ port-object eq 8080
+object-group service GRP_dns_ports udp
+ port-object eq domain
+ port-object range 33434 33534
+object-group service GRP_mixed_svc
+ service-object tcp destination eq 25
+ service-object udp destination eq 514
+ service-object object SVC_tcp_8080
+!
+! ---------------------------------------------------------------------
+! Protocol object-group
+! ---------------------------------------------------------------------
+object-group protocol GRP_vpn_proto
+ protocol-object ospf
+ protocol-object gre
+ protocol-object esp
+!
+! ---------------------------------------------------------------------
+! Access-lists  (access-list ... extended ...)
+! ---------------------------------------------------------------------
+access-list ACL_inside_in extended permit tcp object-group GRP_internal_nets object HOST_web01 object-group GRP_web_ports
+access-list ACL_inside_in extended permit udp object NET_internal any object-group GRP_dns_ports
+access-list ACL_inside_in extended deny ip any any
+access-list ACL_outside_in extended permit tcp any object HOST_web01_public eq https
+access-list ACL_outside_in extended permit icmp any any
+access-group ACL_inside_in in interface inside
+access-group ACL_outside_in in interface outside
+!
+! ---------------------------------------------------------------------
+! Object (auto) NAT
+! ---------------------------------------------------------------------
+object network HOST_web01
+ nat (inside,outside) static HOST_web01_public
+object network NET_internal
+ nat (inside,outside) dynamic interface
+object network NET_dmz
+ nat (dmz,outside) dynamic NAT_pool_outside
+!
+! ---------------------------------------------------------------------
+! Manual (twice) NAT
+! ---------------------------------------------------------------------
+nat (inside,outside) source static NET_internal NET_internal destination static NET_dmz NET_dmz
+nat (inside,outside) source dynamic GRP_internal_nets interface
+!
+: end

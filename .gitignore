@@ -1,0 +1,24 @@
+# Python / virtualenv
+.venv/
+__pycache__/
+*.pyc
+
+# Installed Ansible collection (re-created by setup.sh)
+collections/
+
+# Optional encrypted secrets file (if you choose ansible-vault)
+group_vars/*.vault.yml
+
+# Generated migration data (re-created by ./2_parse.sh from your show-config)
+vars/*.yml
+!vars/.gitkeep
+
+# Apply-time import reports (written by the playbooks on each run)
+reports/*.yml
+!reports/.gitkeep
+
+# Ansible noise
+*.retry
+
+# macOS
+.DS_Store

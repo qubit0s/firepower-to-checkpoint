@@ -1,0 +1,13 @@
+---
+# ===========================================================================
+# Playbook: site (orchestrator)
+# Runs all five migration stages in dependency order:
+#   objects -> object-groups -> services -> policy -> nat
+# Each stage is its own playbook so you can also run them individually.
+# Run:  ansible-playbook playbooks/site.yml
+# ===========================================================================
+- import_playbook: 1_objects.yml  # noqa: name[play]
+- import_playbook: 2_object-groups.yml  # noqa: name[play]
+- import_playbook: 3_services.yml  # noqa: name[play]
+- import_playbook: 4_policy.yml  # noqa: name[play]
+- import_playbook: 5_nat.yml  # noqa: name[play]

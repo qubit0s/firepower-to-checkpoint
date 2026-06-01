@@ -1,0 +1,5 @@
+# Python dependencies (installed into .venv by setup.sh)
+# Install manually with:  pip install -r requirements.txt
+ciscoconfparse2>=0.7.74
+PyYAML>=6.0
+ansible-core>=2.15

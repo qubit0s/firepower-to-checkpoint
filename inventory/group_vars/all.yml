@@ -1,0 +1,38 @@
+---
+# ---------------------------------------------------------------------------
+# Shared variables for all Firepower -> Check Point playbooks.
+# Lives in inventory/group_vars/ so Ansible auto-loads it alongside the inventory.
+# ---------------------------------------------------------------------------
+
+# --- Smart-1 Cloud connection -------------------------------------------------
+# The connection details (tenant host, API key, cloud management id) live in
+# inventory/hosts.ini -- edit them there on your local clone. (For stronger
+# hardening you can instead put ansible_api_key and ansible_cloud_mgmt_id in an
+# encrypted group_vars/all.vault.yml.)
+
+# --- Target policy / package --------------------------------------------------
+# Access-control layer that migrated access rules are written into.
+cp_access_layer: "Network"
+# Policy package that migrated NAT rules are written into.
+cp_nat_package: "Standard"
+
+# --- Defaults applied to created objects -------------------------------------
+cp_default_color: "black"
+
+# --- Publish behaviour --------------------------------------------------------
+# When true, each playbook publishes its session at the end (recommended so you
+# can review each category's changes as a discrete publish). Set false to leave
+# the session open (e.g. when chaining via site.yml and publishing once).
+cp_publish: true
+
+# --- NAT hide-behind target ---------------------------------------------------
+# For Cisco "nat ... dynamic interface" (PAT / hide behind the firewall IP), the
+# Check Point equivalent is hide-NAT behind a gateway object. Set this to the
+# name of the Check Point gateway object that replaces the Firepower. Rules that
+# the parser tagged with hide_behind: gateway use this object as translated source.
+cp_hide_behind_object: "Internet-GW"
+
+# --- Predefined service used for ACL 'permit icmp' lines ----------------------
+# The parser maps bare 'icmp' ACL entries to this Check Point service name.
+# Verify it exists on your management (common choices: icmp-proto, echo-request).
+cp_icmp_service: "icmp-proto"

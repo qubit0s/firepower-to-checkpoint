@@ -1,0 +1,49 @@
+---
+# ===========================================================================
+# Playbook: policy
+# Creates Check Point access rules migrated from Cisco `access-list ... extended`.
+# Rules are written into the access layer named by `cp_access_layer`, in the
+# original ACL order. Objects/groups/services they reference must already exist,
+# so run objects.yml, object-groups.yml and services.yml first.
+# Consumes: ../vars/4_policy.yml
+# Run:  ansible-playbook playbooks/policy.yml
+# ===========================================================================
+- name: "FTD -> Check Point :: access policy"
+  hosts: checkpoint
+  connection: httpapi
+  gather_facts: false
+  vars_files:
+    - ../vars/4_policy.yml
+
+  tasks:
+    - name: Create access rules (in ACL order)
+      check_point.mgmt.cp_mgmt_access_rule:
+        layer: "{{ cp_access_layer }}"
+        name: "{{ item.name }}"
+        position: "{{ rule_index + 1 }}"
+        action: "{{ item.action }}"
+        source: "{{ item.source }}"
+        destination: "{{ item.destination }}"
+        # Map the placeholder icmp service name to the configured one.
+        service: "{{ item.service | map('replace', 'icmp-proto', cp_icmp_service) | list }}"
+        enabled: "{{ item.enabled | default(true) }}"
+        comments: "{{ item.comments | default('') }}"
+        state: present
+        ignore_warnings: true
+      loop: "{{ cp_access_rules | default([]) }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.action }})"
+        index_var: rule_index
+      register: r_rules
+      ignore_errors: true
+
+    - name: Record items that failed to import
+      ansible.builtin.include_tasks: tasks/record_not_imported.yml
+      vars:
+        stage_name: "4_policy"
+        task_results:
+          - "{{ r_rules }}"
+
+    - name: Publish session
+      check_point.mgmt.cp_mgmt_publish:
+      when: cp_publish | bool
