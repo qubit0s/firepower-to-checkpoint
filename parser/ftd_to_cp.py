@@ -766,6 +766,52 @@ class Converter:
         for r in self.rules:
             r["service"] = dedup(["Any" if x in self.svc_any_aliases else x for x in r["service"]])
 
+    def _check_references(self):
+        """Flag references to objects that were never created (parser gap or a
+        reference undefined in the config). Dangling group MEMBERS are dropped so
+        the group still imports; dangling rule/NAT references are flagged only."""
+        known = (set(self.hosts) | set(self.networks) | set(self.ranges)
+                 | set(self.zones) | set(self.svc_tcp) | set(self.svc_udp)
+                 | set(self.svc_other) | set(self.net_groups) | set(self.svc_groups))
+        known |= {(v["fqdn"] if v["fqdn"].startswith(".") else "." + v["fqdn"])
+                  for v in self.fqdns.values()}
+        predefined = {"Any", "Original", "interface", "icmp-proto"}
+        valid = known | predefined
+
+        for n, v in self.net_groups.items():
+            kept = []
+            for m in v["members"]:
+                if m in valid:
+                    kept.append(m)
+                else:
+                    self.unsupported.append(
+                        f"network group {n}: member '{m}' is not defined in the config "
+                        f"(dropped from group); define the object or fix the source name")
+            v["members"] = kept
+        for n, v in self.svc_groups.items():
+            kept = []
+            for m in v["members"]:
+                if m in valid:
+                    kept.append(m)
+                else:
+                    self.unsupported.append(
+                        f"service group {n}: member '{m}' is not defined (dropped from group)")
+            v["members"] = kept
+        for r in self.rules:
+            for fld in ("source", "destination", "service"):
+                for x in r[fld]:
+                    if x not in valid:
+                        self.unsupported.append(
+                            f"access rule {r['name']}: undefined object '{x}' in {fld} "
+                            f"(rule will fail to import until it exists)")
+        for r in self.nat_rules:
+            for k in ("original_source", "original_destination", "original_service",
+                      "translated_source", "translated_destination", "translated_service"):
+                x = r.get(k)
+                if x and x not in valid:
+                    self.unsupported.append(
+                        f"nat rule {r['name']}: undefined object '{x}' in {k}")
+
     def run(self):
         self.parse_interfaces()
         self.parse_network_objects()
@@ -775,6 +821,7 @@ class Converter:
         self.parse_access_lists()
         self.parse_nat()
         self._resolve_any_groups()
+        self._check_references()
 
     # ---- YAML emit ---------------------------------------------------------
     def _dump(self, out_dir, fname, data):
