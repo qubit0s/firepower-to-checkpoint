@@ -79,7 +79,8 @@ PROTOCOL_NAMES = {
 # transformation the parser made; everything else is "needs your attention".
 HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP",
                    "reusing Check Point predefined", "mapped to Check Point predefined",
-                   "not selected for conversion", "no network group created", "renamed to")
+                   "not selected for conversion", "no network group created", "renamed to",
+                   "hide behind firewall IP")
 
 _USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -802,12 +803,18 @@ class Converter:
                     rule["method"] = "static"
                     rule["translated_source"] = cp_name(mapped)
                 else:  # dynamic
-                    rule["method"] = "hide"
                     if mapped == "interface":
-                        rule["translated_source"] = "interface"   # hide behind gateway IP
-                        rule["hide_behind"] = "gateway"
-                    else:
-                        rule["translated_source"] = cp_name(mapped)
+                        # PAT / hide behind the firewall's own IP. In Check Point this is
+                        # the gateway's automatic hide-NAT ("Hide internal networks behind
+                        # the Gateway's external IP" on the gateway NAT tab), NOT a manual
+                        # rule -- so we don't create one.
+                        self.unsupported.append(
+                            f"object NAT '{oname}': hide behind firewall IP -> enable "
+                            f"'Hide internal networks behind the Gateway's external IP' on "
+                            f"the gateway NAT tab (no manual rule created)")
+                        continue
+                    rule["method"] = "hide"
+                    rule["translated_source"] = cp_name(mapped)
                 self.nat_rules.append(rule)
 
         # --- Manual / twice NAT: top-level 'nat (real,mapped) source ...'
@@ -824,6 +831,16 @@ class Converter:
                 continue
             real_if, mapped_if, kind = m.group(1), m.group(2), m.group(3)
             real_src, mapped_src = m.group(4), m.group(5)
+            hide_iface = (kind == "dynamic" and mapped_src == "interface")
+            has_dest, has_svc = bool(m.group(6)), bool(m.group(8))
+            if hide_iface and not has_dest and not has_svc:
+                # Pure PAT hide behind the firewall IP -> gateway automatic hide-NAT
+                # ("Hide internal networks behind the Gateway's external IP"), not a rule.
+                self.unsupported.append(
+                    f"manual NAT source '{cp_name(real_src)}': hide behind firewall IP -> "
+                    f"enable 'Hide internal networks behind the Gateway's external IP' on "
+                    f"the gateway NAT tab (no manual rule created)")
+                continue
             rule = {
                 "name": f"manualnat-{cp_name(real_src)}-{cp_name(mapped_src)}",
                 "type": "manual",
@@ -832,9 +849,13 @@ class Converter:
                 "comments": f"manual NAT ({real_if},{mapped_if}) source {kind}",
                 "enabled": True,
             }
-            if kind == "dynamic" and mapped_src == "interface":
-                rule["translated_source"] = "interface"
-                rule["hide_behind"] = "gateway"
+            if hide_iface:
+                # Source hide behind firewall IP is handled by the gateway NAT checkbox;
+                # keep this rule only for its destination/service translation.
+                self.unsupported.append(
+                    f"manual NAT source '{cp_name(real_src)}': source hide behind firewall IP "
+                    f"is via the gateway NAT checkbox; only its destination/service "
+                    f"translation is imported as a rule")
             elif mapped_src != real_src:                 # real translation
                 rule["translated_source"] = cp_name(mapped_src)
             # else identity (no translation) -> omit translated_source entirely

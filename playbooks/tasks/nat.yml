@@ -18,10 +18,10 @@
     original_source: "{{ item.original_source | default(omit) }}"
     original_destination: "{{ item.original_destination | default(omit) }}"
     original_service: "{{ item.original_service | default(omit) }}"
-    # 'interface' (Cisco PAT) -> hide behind the configured gateway object.
-    translated_source: >-
-      {{ cp_hide_behind_object if (item.translated_source | default('')) == 'interface'
-         else (item.translated_source | default(omit)) }}
+    # Cisco PAT 'hide behind interface' is migrated as the gateway's automatic
+    # hide-NAT (gateway NAT tab checkbox), so the parser does not emit those as
+    # rules -- no translated_source mapping is needed here.
+    translated_source: "{{ item.translated_source | default(omit) }}"
     translated_destination: "{{ item.translated_destination | default(omit) }}"
     translated_service: "{{ item.translated_service | default(omit) }}"
     comments: "{{ item.comments | default('') }}"

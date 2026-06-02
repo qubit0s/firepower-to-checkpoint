@@ -43,12 +43,13 @@ cp_default_color: "black"
 # need to take the session over if you're a different admin than the API key).
 cp_publish: true
 
-# --- NAT hide-behind target ---------------------------------------------------
-# For Cisco "nat ... dynamic interface" (PAT / hide behind the firewall IP), the
-# Check Point equivalent is hide-NAT behind a gateway object. Set this to the
-# name of the Check Point gateway object that replaces the Firepower. Rules that
-# the parser tagged with hide_behind: gateway use this object as translated source.
-cp_hide_behind_object: "Internet-GW"
+# --- NAT: hide behind firewall (PAT) ------------------------------------------
+# Cisco "nat ... dynamic interface" (PAT / hide behind the firewall IP) is NOT
+# migrated as a manual NAT rule. Its Check Point equivalent is the gateway's
+# automatic hide-NAT: on the gateway object's NAT tab, enable "Hide internal
+# networks behind the Gateway's external IP". The parser flags these as
+# auto-handled (see reports/parse_summary.md) so you enable that one setting
+# instead of importing per-rule hide NAT. No configuration is needed here.
 
 # --- Selective apply / undo ---------------------------------------------------
 # Restrict which items are acted on (used by all playbooks, handy for undo.yml).
