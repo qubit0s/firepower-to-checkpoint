@@ -48,6 +48,7 @@ firepower-to-checkpoint/
 ├── playbooks/
 │   ├── 1_objects.yml ... 5_nat.yml   # per-stage wrappers (own session each)
 │   ├── site.yml              # FULL migration in ONE session (use for unpublished runs)
+│   ├── undo.yml              # DELETE migrated items (state: absent), scoped by tag/name
 │   └── tasks/               # stage task files + the shared failure recorder
 │       ├── objects.yml  object-groups.yml  services.yml  policy.yml  nat.yml
 │       └── record_not_imported.yml
@@ -114,6 +115,29 @@ ansible-playbook playbooks/1_objects.yml    # or site.yml; add -C for dry-run
 five stages in that order within a single session (`./3_apply.sh` with no stage). The per-stage
 playbooks (`1_objects.yml` … `5_nat.yml`) each open their own session — see "Publishing & review"
 for how that interacts with unpublished changes.
+
+## Undo / rollback
+
+`undo.yml` deletes (`state: absent`) exactly what the parser generated — reading the same
+`vars/*.yml` — in **reverse dependency order** (NAT → policy → services → object-groups →
+objects) so nothing is "in use" when removed. It works whether or not the changes were
+published, runs in a single session, and (like apply) does **not** publish by default — so you
+can review the deletions before committing them.
+
+Pick what to remove two ways:
+
+```bash
+./3_apply.sh undo                       # delete everything the migration created
+./3_apply.sh undo -C                    # dry-run first (check mode) -- recommended
+./3_apply.sh undo --tags nat,policy     # by category: nat|policy|services|object-groups|objects
+./3_apply.sh undo --tags objects -e '{"select_names":["HOST_web01","NET_dmz"]}'   # by name
+./3_apply.sh undo -e '{"skip_names":["NET_internal"]}'                            # all except some
+```
+
+`select_names` (allow-list) and `skip_names` (deny-list) also live in `group_vars/all.yml`.
+If a delete fails because the object is still in use, it's logged to
+`reports/undo_<category>_not_imported.yml`; remove the referencing item (or run a wider undo)
+and re-run.
 
 ## What didn't make it in — two reports
 

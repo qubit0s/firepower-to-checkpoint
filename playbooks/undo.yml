@@ -1,0 +1,267 @@
+---
+# ===========================================================================
+# Playbook: undo -- DELETE migrated items (state: absent) in a single session.
+#
+# Removes exactly what the parser generated (reads the same vars/*.yml), in
+# REVERSE dependency order so nothing is "in use" when deleted:
+#   NAT -> policy -> services -> object-groups -> objects
+#
+# Pick what to remove:
+#   * by category, with --tags : nat | policy | services | object-groups | objects
+#   * by name, with select_names / skip_names (see group_vars/all.yml)
+#
+# Like the apply flow, this does NOT publish by default (cp_publish=false) -- the
+# deletions stage in one session for you to review and publish manually.
+#
+# Examples:
+#   ./3_apply.sh undo                         # delete everything (one session)
+#   ./3_apply.sh undo -C                      # dry-run first (check mode)
+#   ./3_apply.sh undo --tags nat,policy       # only NAT + access rules
+#   ./3_apply.sh undo --tags objects -e '{"select_names":["HOST_web01"]}'
+# ===========================================================================
+- name: "FTD -> Check Point :: UNDO (delete migrated items)"
+  hosts: checkpoint
+  connection: httpapi
+  gather_facts: false
+  vars_files:
+    - ../vars/1_objects.yml
+    - ../vars/2_object_groups.yml
+    - ../vars/3_services.yml
+    - ../vars/4_policy.yml
+    - ../vars/5_nat.yml
+
+  tasks:
+    - name: "UNDO notice"
+      tags: [always]
+      ansible.builtin.debug:
+        msg: >-
+          UNDO will DELETE migrated items (state=absent).
+          select_names={{ select_names }} skip_names={{ skip_names }}
+          publish={{ cp_publish }}. Use -C to dry-run, --tags to scope.
+
+    # ---- 1. NAT rules ------------------------------------------------------
+    - name: "Undo NAT rules"
+      tags: [nat]
+      block:
+        - name: Delete NAT rules
+          check_point.mgmt.cp_mgmt_nat_rule:
+            package: "{{ cp_nat_package }}"
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_nat_rules | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_nat
+          ignore_errors: true
+
+        - name: Record NAT rules that failed to delete
+          ansible.builtin.include_tasks: tasks/record_not_imported.yml
+          vars:
+            stage_name: "undo_nat"
+            report_action: "delete"
+            task_results:
+              - "{{ r_u_nat }}"
+
+    # ---- 2. Access rules ---------------------------------------------------
+    - name: "Undo access rules"
+      tags: [policy]
+      block:
+        - name: Delete access rules
+          check_point.mgmt.cp_mgmt_access_rule:
+            layer: "{{ cp_access_layer }}"
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_access_rules | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_rules
+          ignore_errors: true
+
+        - name: Record access rules that failed to delete
+          ansible.builtin.include_tasks: tasks/record_not_imported.yml
+          vars:
+            stage_name: "undo_policy"
+            report_action: "delete"
+            task_results:
+              - "{{ r_u_rules }}"
+
+    # ---- 3. Services (groups first, then members) --------------------------
+    - name: "Undo services"
+      tags: [services]
+      block:
+        - name: Delete service-groups
+          check_point.mgmt.cp_mgmt_service_group:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_service_groups | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_sg
+          ignore_errors: true
+
+        - name: Delete other (IP-protocol) services
+          check_point.mgmt.cp_mgmt_service_other:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_services_other | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_other
+          ignore_errors: true
+
+        - name: Delete UDP services
+          check_point.mgmt.cp_mgmt_service_udp:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_services_udp | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_udp
+          ignore_errors: true
+
+        - name: Delete TCP services
+          check_point.mgmt.cp_mgmt_service_tcp:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_services_tcp | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_tcp
+          ignore_errors: true
+
+        - name: Record services that failed to delete
+          ansible.builtin.include_tasks: tasks/record_not_imported.yml
+          vars:
+            stage_name: "undo_services"
+            report_action: "delete"
+            task_results:
+              - "{{ r_u_sg }}"
+              - "{{ r_u_other }}"
+              - "{{ r_u_udp }}"
+              - "{{ r_u_tcp }}"
+
+    # ---- 4. Network object-groups ------------------------------------------
+    - name: "Undo network object-groups"
+      tags: [object-groups, groups]
+      block:
+        - name: Delete network groups
+          check_point.mgmt.cp_mgmt_group:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_network_groups | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_groups
+          ignore_errors: true
+
+        - name: Record groups that failed to delete
+          ansible.builtin.include_tasks: tasks/record_not_imported.yml
+          vars:
+            stage_name: "undo_object-groups"
+            report_action: "delete"
+            task_results:
+              - "{{ r_u_groups }}"
+
+    # ---- 5. Network objects ------------------------------------------------
+    - name: "Undo network objects"
+      tags: [objects]
+      block:
+        - name: Delete dns-domain objects
+          check_point.mgmt.cp_mgmt_dns_domain:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_dns_domains | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_dns
+          ignore_errors: true
+
+        - name: Delete address-range objects
+          check_point.mgmt.cp_mgmt_address_range:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_address_ranges | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_ranges
+          ignore_errors: true
+
+        - name: Delete network objects
+          check_point.mgmt.cp_mgmt_network:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_networks | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_networks
+          ignore_errors: true
+
+        - name: Delete host objects
+          check_point.mgmt.cp_mgmt_host:
+            name: "{{ item.name }}"
+            state: absent
+            ignore_warnings: true
+          loop: "{{ cp_hosts | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - (select_names | length == 0) or (item.name in select_names)
+            - item.name not in skip_names
+          register: r_u_hosts
+          ignore_errors: true
+
+        - name: Record objects that failed to delete
+          ansible.builtin.include_tasks: tasks/record_not_imported.yml
+          vars:
+            stage_name: "undo_objects"
+            report_action: "delete"
+            task_results:
+              - "{{ r_u_dns }}"
+              - "{{ r_u_ranges }}"
+              - "{{ r_u_networks }}"
+              - "{{ r_u_hosts }}"
+
+    - name: Publish session (only when cp_publish=true)
+      tags: [always]
+      check_point.mgmt.cp_mgmt_publish:
+      when: cp_publish | bool

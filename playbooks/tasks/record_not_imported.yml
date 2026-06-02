@@ -4,11 +4,12 @@
 # into Check Point, with the API error for each.
 #
 # Caller passes:
-#   stage_name   - short stage label (e.g. "1_objects")
-#   task_results - list of registered loop results from the stage's create tasks
+#   stage_name    - short stage label (e.g. "1_objects" or "undo_nat")
+#   task_results  - list of registered loop results from the stage's tasks
+#   report_action - optional verb for wording: "import" (default) or "delete"
 #
-# Each create task in the stage must use `register:` and `ignore_errors: true`
-# so the run continues and failures are collected here instead of aborting.
+# Each task must use `register:` and `ignore_errors: true` so the run continues
+# and failures are collected here instead of aborting.
 # Output: reports/<stage_name>_not_imported.yml  (always written, even if empty).
 # ===========================================================================
 
@@ -30,6 +31,14 @@
     loop_var: rec
     label: "{{ rec.item.name | default('?') }}"
 
+- name: "Report: build payload"
+  ansible.builtin.set_fact:
+    report_payload:
+      stage: "{{ stage_name }}"
+      action: "{{ report_action | default('import') }}"
+      failed_count: "{{ not_imported | length }}"
+      not_imported: "{{ not_imported }}"
+
 - name: "Report: ensure reports directory exists"
   delegate_to: localhost
   run_once: true
@@ -38,21 +47,21 @@
     state: directory
     mode: "0755"
 
-- name: "Report: write not-imported file for {{ stage_name }}"
+- name: "Report: write report file for {{ stage_name }}"
   delegate_to: localhost
   run_once: true
   ansible.builtin.copy:
     mode: "0644"
     dest: "{{ playbook_dir }}/../reports/{{ stage_name }}_not_imported.yml"
     content: |
-      # AUTO-GENERATED on apply. Items that FAILED to import into Check Point
-      # during stage '{{ stage_name }}', with the reason. Empty list = all imported.
+      # AUTO-GENERATED. Items that FAILED to {{ report_action | default('import') }} on
+      # Check Point during stage '{{ stage_name }}', with the reason. Empty = all OK.
       # Generated {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
-      {{ {'stage': stage_name, 'failed_count': not_imported | length, 'not_imported': not_imported} | to_nice_yaml(indent=2) }}
+      {{ report_payload | to_nice_yaml(indent=2) }}
 
 - name: "Report: summarise failures for {{ stage_name }}"
   ansible.builtin.debug:
     msg: >-
-      {{ stage_name }}: {{ not_imported | length }} item(s) failed to import
-      -> reports/{{ stage_name }}_not_imported.yml
+      {{ stage_name }}: {{ not_imported | length }} item(s) failed to
+      {{ report_action | default('import') }} -> reports/{{ stage_name }}_not_imported.yml
   when: not_imported | length > 0

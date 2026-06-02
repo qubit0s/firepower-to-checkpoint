@@ -2,9 +2,10 @@
 # ===========================================================================
 # 3_apply.sh -- run the migration playbook(s) against Smart-1 Cloud.
 #
-#   ./3_apply.sh                 # all stages, in order (site.yml)
+#   ./3_apply.sh                 # all stages, single session (site.yml)
 #   ./3_apply.sh objects         # one stage: objects | object-groups | services | policy | nat
 #   ./3_apply.sh objects -C      # dry-run (check mode); any extra args pass through
+#   ./3_apply.sh undo            # DELETE migrated items (state=absent); --tags to scope
 # ===========================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -24,10 +25,11 @@ case "$STAGE" in
   policy)                PB="playbooks/4_policy.yml" ;;
   nat)                   PB="playbooks/5_nat.yml" ;;
   site|all)              PB="playbooks/site.yml" ;;
+  undo)                  PB="playbooks/undo.yml" ;;
   *)                     PB="playbooks/${STAGE}.yml" ;;   # also accept exact filename
 esac
 if [ ! -f "$PB" ]; then
-  echo "ERROR: unknown stage '$STAGE'. Valid: objects | object-groups | services | policy | nat | site"
+  echo "ERROR: unknown stage '$STAGE'. Valid: objects | object-groups | services | policy | nat | site | undo"
   exit 1
 fi
 

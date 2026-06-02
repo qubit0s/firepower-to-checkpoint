@@ -39,6 +39,14 @@ cp_publish: false
 # the parser tagged with hide_behind: gateway use this object as translated source.
 cp_hide_behind_object: "Internet-GW"
 
+# --- Selective apply / undo ---------------------------------------------------
+# Restrict which items are acted on (used by all playbooks, handy for undo.yml).
+# select_names: if non-empty, ONLY items whose name is in this list are touched.
+# skip_names:   items whose name is in this list are always skipped.
+# Override on the CLI, e.g.:  ./3_apply.sh undo -e '{"select_names":["HOST_web01"]}'
+select_names: []
+skip_names: []
+
 # --- Predefined service used for ACL 'permit icmp' lines ----------------------
 # The parser maps bare 'icmp' ACL entries to this Check Point service name.
 # Verify it exists on your management (common choices: icmp-proto, echo-request).
