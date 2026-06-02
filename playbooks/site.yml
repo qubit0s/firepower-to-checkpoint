@@ -34,7 +34,3 @@
 
     - name: Write apply summary
       ansible.builtin.include_tasks: tasks/write_apply_summary.yml
-
-    - name: Publish session (only when cp_publish=true)
-      check_point.mgmt.cp_mgmt_publish:
-      when: cp_publish | bool

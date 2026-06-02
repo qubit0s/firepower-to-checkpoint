@@ -83,3 +83,7 @@
       - "{{ r_networks }}"
       - "{{ r_ranges }}"
       - "{{ r_dns }}"
+
+- name: "Publish session after this stage (when cp_publish=true)"
+  check_point.mgmt.cp_mgmt_publish:
+  when: cp_publish | bool

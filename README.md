@@ -85,23 +85,28 @@ secrets are never committed. (Optional hardening: put secrets in an encrypted
 
 ## Publishing & review
 
-By default the playbooks **do not publish** (`cp_publish: false` in
-`inventory/group_vars/all.yml`). They create everything, then leave it for you to review in
-SmartConsole under **Manage & Settings → Sessions** and publish manually.
+`cp_publish` (in `inventory/group_vars/all.yml`) controls publishing. When **true**, each
+**stage** publishes at its end (objects → groups → services → policy → nat). When **false**
+(default), nothing is published and the changes sit in the session for a pre-publish review.
 
-Because Check Point sessions are private until published, unpublished changes are visible
-**only within the session that made them**. So for an unpublished run, use the single-session
-orchestrator:
+**Why per-stage, and why it matters at scale:** the Check Point API session times out (~10 min)
+and the Ansible plugin's login cannot extend it (verified in the plugin source — it sends no
+`session-timeout`). A long single unpublished run (hundreds of objects) therefore exceeds the
+window, the session rolls over, and changes get **split across several saved sessions** — so you
+won't see one session with everything. Publishing **per stage** commits each stage well within
+the window and avoids orphaned sessions.
 
-```bash
-./3_apply.sh            # site.yml: all stages in ONE session, nothing published
-```
+Guidance by size:
 
-Running the per-stage playbooks separately opens a **new session each time**, so a later
-stage can't see an earlier stage's *unpublished* objects. That's fine if you publish each
-stage — set `cp_publish: true` (each stage publishes at its end), or publish a stage manually
-before running the next. To auto-publish the whole single-session run, set `cp_publish: true`
-and run `./3_apply.sh`.
+- **Large migrations (hundreds of objects):** set `cp_publish: true` and run `./3_apply.sh`.
+  Each stage publishes incrementally and reliably; review the published result (and `undo.yml`
+  can roll it back). A single unpublished session is *not* reliable at this scale.
+- **Small configs / pre-publish review:** keep `cp_publish: false` and run `./3_apply.sh` (one
+  session); review under **Manage & Settings → Sessions** and publish manually. If you're a
+  different admin than the API key, you may need to **take over** that session to see/publish it.
+
+Either way use `./3_apply.sh` (single session) — running per-stage playbooks separately opens a
+new session each time, so a later stage can't see an earlier stage's *unpublished* objects.
 
 ## Manual usage (if you prefer not to use the wrappers)
 

@@ -85,3 +85,7 @@
       - "{{ r_other }}"
       - "{{ r_sg_create }}"
       - "{{ r_sg_members }}"
+
+- name: "Publish session after this stage (when cp_publish=true)"
+  check_point.mgmt.cp_mgmt_publish:
+  when: cp_publish | bool

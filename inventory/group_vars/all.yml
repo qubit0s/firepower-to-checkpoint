@@ -20,16 +20,19 @@ cp_nat_package: "Standard"
 cp_default_color: "black"
 
 # --- Publish behaviour --------------------------------------------------------
-# Default FALSE: the playbooks create all objects/rules but do NOT publish, so
-# you can log in to SmartConsole, review the session (Manage & Settings >
-# Sessions), and publish manually. Set true to auto-publish at the end of a run.
+# When true, each STAGE publishes at its end (objects, then groups, then ...).
+# Per-stage publishing matters for LARGE configs: the Check Point API session
+# times out (~10 min, and the Ansible plugin cannot extend it), so a long single
+# unpublished run rolls into multiple sessions and changes get split. Publishing
+# per stage commits each stage well within the window.
 #
-# IMPORTANT: Check Point sessions are private until published, so unpublished
-# changes are only visible within the session that made them. Run the full
-# migration via `site.yml` (single session) when leaving changes unpublished --
-# running the per-stage playbooks separately opens a new session each time, and
-# a later stage cannot reference earlier UNPUBLISHED objects. (Per-stage runs are
-# fine if you publish each stage, i.e. set cp_publish: true.)
+# false (default): create everything but DON'T publish, for a pre-publish review.
+#   Only reliable for SMALLER configs that finish within one session window --
+#   for large migrations (hundreds of objects) set cp_publish: true.
+#
+# Check Point sessions are private until published: unpublished changes are only
+# visible within the session that made them (Manage & Settings > Sessions; you may
+# need to take the session over if you're a different admin than the API key).
 cp_publish: false
 
 # --- NAT hide-behind target ---------------------------------------------------
