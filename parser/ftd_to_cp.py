@@ -642,86 +642,103 @@ class Converter:
         counters = {}
         for acl in self.parse.find_objects(ace_re):
             toks = acl.text.split()
+            if len(toks) < 5:
+                continue
             aclname = toks[1]
             if aclname not in targets:
                 continue
-            action_word = toks[3]
-            proto = toks[4]
-            rest = toks[5:]
-            inactive = "inactive" in toks
-            rule_id = toks[toks.index("rule-id") + 1] if "rule-id" in toks else None
-
-            # protocol given as a service object/group:  'permit object-group SVC ...'
-            svc_from_proto = None
-            if proto in ("object", "object-group") and rest:
-                svc_from_proto = [cp_name(rest[0])]
-                rest = rest[1:]
-
-            szone, rest = self._consume_ifc(rest)        # source 'ifc <zone>'
-            src, rest = self._resolve_addr_tokens(rest)
-            sp, rest = self._consume_ports(proto, rest)  # optional source port
-            if sp:
+            # A single malformed/unsupported ACE must never abort the whole parse
+            # (real FMC rulebases have hundreds of lines and constructs this parser
+            # may not know -- user/identity, security-group, fqdn-in-ACL, etc.).
+            # Flag it as needs-attention and keep going so the rest still convert.
+            try:
+                self._parse_ace(acl, toks, aclname, binding, remarks, counters)
+            except Exception as exc:  # noqa: BLE001 - any parse failure is non-fatal
                 self.unsupported.append(
-                    f"acl {aclname}: source-port match not represented in CP service; review")
-            dzone, rest = self._consume_ifc(rest)        # destination 'ifc <zone>'
-            dst, rest = self._resolve_addr_tokens(rest)
-            svc, rest = self._consume_ports(proto, rest)  # optional destination port
+                    f"acl {aclname}: could not parse rule "
+                    f"'{acl.text.strip()[:90]}' ({type(exc).__name__}: {exc}); skipped, review")
 
-            if svc_from_proto is not None:
-                svc = svc_from_proto
-            elif svc is None:
-                if proto in ("icmp", "icmp6"):
-                    svc = ["icmp-proto"]
-                elif proto in ("ip", "tcp", "udp"):
-                    svc = ["Any"]
+    def _parse_ace(self, acl, toks, aclname, binding, remarks, counters):
+        """Convert one matched 'access-list ... extended|advanced ...' line into a
+        rule dict appended to self.rules. Raises on unexpected token shapes; the
+        caller treats any exception as a non-fatal 'needs attention' flag."""
+        action_word = toks[3]
+        proto = toks[4]
+        rest = toks[5:]
+        inactive = "inactive" in toks
+        rule_id = toks[toks.index("rule-id") + 1] if "rule-id" in toks else None
+
+        # protocol given as a service object/group:  'permit object-group SVC ...'
+        svc_from_proto = None
+        if proto in ("object", "object-group") and rest:
+            svc_from_proto = [cp_name(rest[0])]
+            rest = rest[1:]
+
+        szone, rest = self._consume_ifc(rest)        # source 'ifc <zone>'
+        src, rest = self._resolve_addr_tokens(rest)
+        sp, rest = self._consume_ports(proto, rest)  # optional source port
+        if sp:
+            self.unsupported.append(
+                f"acl {aclname}: source-port match not represented in CP service; review")
+        dzone, rest = self._consume_ifc(rest)        # destination 'ifc <zone>'
+        dst, rest = self._resolve_addr_tokens(rest)
+        svc, rest = self._consume_ports(proto, rest)  # optional destination port
+
+        if svc_from_proto is not None:
+            svc = svc_from_proto
+        elif svc is None:
+            if proto in ("icmp", "icmp6"):
+                svc = ["icmp-proto"]
+            elif proto in ("ip", "tcp", "udp"):
+                svc = ["Any"]
+            else:
+                # named/numeric IP protocol (gre, ipinip, esp, 41, ...) -> service-other
+                member = self._auto_protocol(proto)
+                if member:
+                    svc = [member]
                 else:
-                    # named/numeric IP protocol (gre, ipinip, esp, 41, ...) -> service-other
-                    member = self._auto_protocol(proto)
-                    if member:
-                        svc = [member]
-                    else:
-                        svc = ["Any"]
-                        self.unsupported.append(
-                            f"acl {aclname}: unknown protocol '{proto}' -> Any; review")
+                    svc = ["Any"]
+                    self.unsupported.append(
+                        f"acl {aclname}: unknown protocol '{proto}' -> Any; review")
 
-            # interface (ifc) qualifiers are NOT wired into the rule (no zones in
-            # the rulebase); they're recorded in the comment for reference.
-            source = dedup(src)
-            destination = dedup(dst)
-            ifc_note = ""
-            if szone or dzone:
-                ifc_note = f" [ifc {szone or 'any'} -> {dzone or 'any'}]"
+        # interface (ifc) qualifiers are NOT wired into the rule (no zones in
+        # the rulebase); they're recorded in the comment for reference.
+        source = dedup(src)
+        destination = dedup(dst)
+        ifc_note = ""
+        if szone or dzone:
+            ifc_note = f" [ifc {szone or 'any'} -> {dzone or 'any'}]"
 
-            if any(t in ("object", "object-group", "ifc") for t in rest):
-                self.unsupported.append(
-                    f"acl {aclname} rule-id {rule_id}: unparsed tokens '{' '.join(rest)}'; review")
-            if "time-range" in toks:
-                self.unsupported.append(f"acl {aclname}: time-range not migrated; review")
+        if any(t in ("object", "object-group", "ifc") for t in rest):
+            self.unsupported.append(
+                f"acl {aclname} rule-id {rule_id}: unparsed tokens '{' '.join(rest)}'; review")
+        if "time-range" in toks:
+            self.unsupported.append(f"acl {aclname}: time-range not migrated; review")
 
-            package = cp_name(aclname)
-            self.packages[package] = {"comments": f"from Cisco ACL {aclname} "
-                                                  f"({binding.get(aclname, 'unbound')})"}
-            counters[aclname] = counters.get(aclname, 0) + 1
-            note = f"from {aclname}"
-            if rule_id:
-                note += f" rule-id {rule_id}"
-                if rule_id in remarks:
-                    note += f" [{remarks[rule_id]}]"
-            note += ifc_note
-            if inactive:
-                note += " [inactive]"
-            self.rules.append({
-                "acl": aclname,
-                "package": package,
-                "layer": f"{package} Network",
-                "name": f"{package}-{counters[aclname]}",
-                "action": "Accept" if action_word == "permit" else "Drop",
-                "source": source,
-                "destination": destination,
-                "service": svc,
-                "enabled": not inactive,
-                "comments": note,
-            })
+        package = cp_name(aclname)
+        self.packages[package] = {"comments": f"from Cisco ACL {aclname} "
+                                              f"({binding.get(aclname, 'unbound')})"}
+        counters[aclname] = counters.get(aclname, 0) + 1
+        note = f"from {aclname}"
+        if rule_id:
+            note += f" rule-id {rule_id}"
+            if rule_id in remarks:
+                note += f" [{remarks[rule_id]}]"
+        note += ifc_note
+        if inactive:
+            note += " [inactive]"
+        self.rules.append({
+            "acl": aclname,
+            "package": package,
+            "layer": f"{package} Network",
+            "name": f"{package}-{counters[aclname]}",
+            "action": "Accept" if action_word == "permit" else "Drop",
+            "source": source,
+            "destination": destination,
+            "service": svc,
+            "enabled": not inactive,
+            "comments": note,
+        })
 
     # ======================================================================
     # 6. NAT  -> nat.yml
@@ -1113,6 +1130,16 @@ def main():
 
     if not os.path.isfile(args.config):
         sys.exit(f"Config file not found: {args.config}")
+
+    # Remove any vars/*.yml from a previous parse BEFORE we start. If this run
+    # fails partway, the apply stage then finds no vars and fails loudly, instead
+    # of silently re-applying stale data from an earlier (e.g. sample) parse.
+    if os.path.isdir(args.out):
+        for fn in ("1_objects.yml", "2_object_groups.yml", "3_services.yml",
+                   "4_policy.yml", "5_nat.yml"):
+            stale = os.path.join(args.out, fn)
+            if os.path.isfile(stale):
+                os.remove(stale)
 
     conv = Converter(args.config)
     if args.acls.strip():
