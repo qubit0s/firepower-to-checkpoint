@@ -108,29 +108,45 @@ RESERVED_NAMES = {"any", "all", "none", "internet", "all_internet"}
 # Check Point predefined service names (lowercased). Migrated services/groups with
 # these names are NOT created -- references resolve to the built-in (user chose
 # "reuse the built-in"). Extend as collisions are found.
+# Names that EXACTLY match a Check Point predefined service (so a same-named
+# Cisco object is not re-created; the reference resolves to the built-in).
+# AUDITED against the Check Point docs MCP -- only names verified (or universal
+# bedrock built-ins like http/ssh/smtp) are kept. When in doubt a name is OMITTED
+# here on purpose: the parser then CREATES it from its config definition (a
+# same-name collision with a read-only built-in is handled as a benign warning),
+# which is safe. A name must NEVER be listed here unless Check Point really spells
+# it this way -- otherwise the reference fails 'object not found' (the DNS_UDP
+# bug). Cisco names that Check Point spells differently go in SERVICE_ALIASES.
+# Removed in audit (not real CP names): ftp_bidir, ftp-port, ftp-pasv, pop-3,
+# ntp-udp, ldap-udp, ldap-ssl, kerberos_v5_tcp, radius-acct, sip_any, sqlnet1,
+# sqlnet2, ica-browsing. Moved to SERVICE_ALIASES: netbios-ns/-dgm/-ssn.
 PREDEFINED_SERVICES = {
-    "ftp", "ftp_bidir", "ftp-port", "ftp-pasv", "http", "https", "ssh", "telnet",
-    "smtp", "pop-3", "pop3", "imap", "nntp", "ntp", "ntp-udp", "snmp", "snmp-trap",
-    "ldap", "ldap-udp", "ldap-ssl", "rdp", "kerberos", "kerberos_v5_tcp", "radius",
-    "radius-acct", "tacacs", "sip", "sip_any", "h323", "rtsp", "domain-tcp",
-    "domain-udp", "tftp", "syslog", "echo-request", "icmp-proto",
-    "netbios-ns", "netbios-dgm", "netbios-ssn", "nbname", "nbdatagram", "nbsession",
-    "microsoft-ds", "ms-sql-s", "ms-sql-m", "gre", "esp", "ah", "ospf", "bgp", "rip",
-    "pim", "igmp", "vrrp", "sqlnet1", "sqlnet2", "ica", "finger", "gopher", "whois",
-    "lpd", "ident", "daytime", "discard", "irc", "uucp", "ica-browsing",
+    "ftp", "http", "https", "ssh", "telnet", "smtp", "pop3", "imap", "nntp",
+    "domain-tcp", "domain-udp", "ntp", "snmp", "snmp-trap", "ldap", "rdp",
+    "kerberos", "radius", "tacacs", "sip", "h323", "rtsp", "tftp", "syslog",
+    "nbname", "nbdatagram", "nbsession", "microsoft-ds", "ms-sql-s", "ms-sql-m",
+    "echo-request", "icmp-proto", "gre", "esp", "ah", "ospf", "bgp", "rip",
+    "pim", "igmp", "vrrp", "ica", "finger", "gopher", "whois", "lpd", "ident",
+    "daytime", "discard", "irc", "uucp",
 }
 
 # Cisco/FMC service names whose Check Point predefined equivalent has a DIFFERENT
-# name. Many are FMC "system" service objects that are referenced in the ACL but
-# never written as an 'object service' line, so the parser has nothing to create
-# -- the reference must be rewritten to the Check Point built-in or it fails
-# 'object not found'. Keys are lower-cased; values are exact Check Point names.
+# name. Two cases: (1) FMC "system" service objects referenced in the ACL but
+# never written as an 'object service' line, so there is nothing to create
+# (DNS_UDP); (2) Cisco port keywords Check Point spells differently (netbios-ns
+# -> nbname). Either way the reference is rewritten to the built-in or it fails
+# 'object not found'. Keys are lower-cased; values are EXACT Check Point names
+# (verified via the Check Point docs MCP).
 SERVICE_ALIASES = {
     "dns": "domain-udp",
     "dns_udp": "domain-udp",
     "dns_tcp": "domain-tcp",
     "dns_over_udp": "domain-udp",
     "dns_over_tcp": "domain-tcp",
+    "www": "http",
+    "netbios-ns": "nbname",
+    "netbios-dgm": "nbdatagram",
+    "netbios-ssn": "nbsession",
 }
 
 
