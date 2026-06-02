@@ -78,7 +78,8 @@ PROTOCOL_NAMES = {
 # Flags whose message contains one of these are "auto-handled (FYI)" -- a safe
 # transformation the parser made; everything else is "needs your attention".
 HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP",
-                   "reusing Check Point predefined", "not selected for conversion")
+                   "reusing Check Point predefined", "not selected for conversion",
+                   "no network group created")
 
 _USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -816,14 +817,13 @@ class Converter:
             note = f"from Cisco interface {hw} (nameif {nameif})"
             if seclevel is not None:
                 note += f", security-level {seclevel}"
-            members = []
-            if ip and mask:
-                members.append(self._auto_network(ip, mask))   # connected subnet
-            else:
+            if not (ip and mask):
+                # No IPv4 (e.g. diagnostic / port-channel parent) -> skip; nothing to group.
                 self.unsupported.append(
-                    f"interface group {cp_name(nameif)}: no IPv4 address on interface; "
-                    f"created empty -- add member networks for this zone manually")
-            self.net_groups[cp_name(nameif)] = {"members": members, "comments": note}
+                    f"interface '{nameif}': no IPv4 address -> no network group created (skipped)")
+                continue
+            self.net_groups[cp_name(nameif)] = {
+                "members": [self._auto_network(ip, mask)], "comments": note}
 
     def _resolve_any_groups(self):
         """Check Point's predefined 'Any' cannot be a group member. A group that
