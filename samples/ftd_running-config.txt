@@ -6,6 +6,18 @@ NGFW Version 7.2.11
 !
 hostname firepower2110
 !
+interface Ethernet1/1
+ nameif inside
+ security-level 100
+ ip address 10.10.0.1 255.255.0.0
+interface Ethernet1/2
+ nameif outside
+ security-level 0
+ ip address 203.0.113.1 255.255.255.0
+interface Ethernet1/3
+ nameif dmz
+ security-level 50
+!
 ! ---------------------------------------------------------------------
 ! Network objects  (object network ...)
 ! ---------------------------------------------------------------------
@@ -30,6 +42,13 @@ object network HOST_web01_public
  host 203.0.113.11
 object network NAT_pool_outside
  range 203.0.113.100 203.0.113.120
+object network NET_v6_lan
+ subnet 2001:db8:abcd::/64
+!
+object-group icmp-type GRP_icmp_mgmt
+ icmp-object echo
+ icmp-object echo-reply
+ icmp-object unreachable
 !
 ! ---------------------------------------------------------------------
 ! Service objects  (object service ...)
@@ -86,6 +105,9 @@ access-list ACL_inside_in extended permit udp object NET_internal any object-gro
 access-list ACL_inside_in extended deny ip any any
 access-list ACL_outside_in extended permit tcp any object HOST_web01_public eq https
 access-list ACL_outside_in extended permit icmp any any
+access-list ACL_outside_in extended permit tcp any eq 1024 object HOST_web01_public eq 8443
+access-list ACL_outside_in extended permit udp any object NET_internal lt 1024
+access-list ACL_outside_in extended deny tcp any any inactive
 access-group ACL_inside_in in interface inside
 access-group ACL_outside_in in interface outside
 !

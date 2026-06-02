@@ -171,18 +171,18 @@ parser or mapping fixes.
 
 | Cisco FTD (ASA syntax) | Check Point module | Notes |
 |---|---|---|
-| `object network … host` | `cp_mgmt_host` | |
-| `object network … subnet` | `cp_mgmt_network` | dotted mask → `mask_length` |
-| `object network … range` | `cp_mgmt_address_range` | |
-| `object network … fqdn` | `cp_mgmt_dns_domain` | name prefixed with `.`, `is_sub_domain: false` |
-| `object-group network` | `cp_mgmt_group` | created empty, then populated (handles nesting) |
-| `object service tcp/udp` | `cp_mgmt_service_tcp` / `_udp` | `destination eq/range` |
-| `object-group service` | `cp_mgmt_service_group` | `tcp-udp` groups expand to both protocols |
-| `object-group protocol` | `cp_mgmt_service_group` of `cp_mgmt_service_other` | each protocol → "Other" service by IP-protocol number (GRE=47, ESP=50, OSPF=89…); `ip` → `Any` |
-| `access-list … extended` | `cp_mgmt_access_rule` | `permit`→Accept, `deny`→Drop; written to `cp_access_layer` in ACL order |
-| object NAT `static` | `cp_mgmt_nat_rule` method `static` | |
-| object NAT `dynamic` | `cp_mgmt_nat_rule` method `hide` | `dynamic interface` → hide behind `cp_hide_behind_object` |
-| manual/twice NAT | `cp_mgmt_nat_rule` | source/destination/service mapped; `interface` → gateway |
+| `interface … nameif` | `cp_mgmt_security_zone` | one zone per nameif; created, **not** auto-wired into rules (binding kept in rule comment) |
+| `object network … host` | `cp_mgmt_host` | IPv4 or IPv6 |
+| `object network … subnet` | `cp_mgmt_network` | IPv4 (`a.b.c.d mask`) and IPv6 (`addr/prefix`); `0.0.0.0/0` & `::/0` → `Any` |
+| `object network … range` | `cp_mgmt_address_range` | IPv4/IPv6 |
+| `object network … fqdn [v4\|v6] <d> id N` | `cp_mgmt_dns_domain` | skips `v4`/`id N`; name `.<domain>`, `is_sub_domain: false`; de-duped |
+| `object-group network` | `cp_mgmt_group` | created empty, then populated (handles nesting, IPv6, CIDR) |
+| `object service` / `object-group service` | `cp_mgmt_service_tcp` / `_udp` (+ `_group`) | `eq`/`range`/`lt`/`gt`; `neq` flagged; `tcp-udp` expands |
+| `object-group protocol` | `cp_mgmt_service_group` of `cp_mgmt_service_other` | each protocol → "Other" service by IP-protocol number; `ip` → `Any` |
+| `object-group icmp-type` | `cp_mgmt_service_group` (ICMP service-other) | mapped to generic ICMP; per-type granularity flagged |
+| `access-list … extended` | `cp_mgmt_access_rule` | `permit`→Accept, `deny`→Drop; source+dest ports; `inactive`→disabled; `time-range`/`interface`-as-addr flagged |
+| object NAT `static` / `dynamic` | `cp_mgmt_nat_rule` (`static` / `hide`) | `dynamic interface` → hide behind `cp_hide_behind_object` |
+| manual/twice NAT | `cp_mgmt_nat_rule` | `after-auto`/`no-proxy-arp` tolerated; source/dest/service mapped |
 
 **Inline literals.** Where Cisco embeds a bare address or port (e.g. `network-object host
 10.0.0.1`, `eq https`), Check Point has no name to reference, so the parser synthesises a

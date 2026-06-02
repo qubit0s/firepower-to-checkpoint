@@ -154,6 +154,7 @@ class Converter:
         self.svc_udp = OrderedDict()      # name -> {port, comments}
         self.svc_other = OrderedDict()    # name -> {ip_protocol, comments}
         self.svc_groups = OrderedDict()   # name -> {members:[], comments}
+        self.zones = OrderedDict()        # name -> {comments}  (from interface nameif)
         self.rules = []                   # list of dicts
         self.nat_rules = []               # list of dicts
         self.unsupported = []             # list of strings
@@ -260,14 +261,24 @@ class Converter:
                 if t.startswith("host "):
                     self.hosts[name] = {"ip_address": t.split()[1], "comments": comments}
                 elif t.startswith("subnet "):
-                    _, subnet, mask = t.split()[:3]
-                    if mask_to_prefix(mask) == 0:
-                        # 0.0.0.0/0 named object == "Any"; alias references to it.
-                        self.any_aliases.add(name)
+                    parts = t.split()
+                    if len(parts) == 2 and "/" in parts[1]:        # IPv6: 'subnet 2001:db8::/64'
+                        addr, plen = parts[1].split("/", 1)
+                        if plen == "0":
+                            self.any_aliases.add(name)
+                        else:
+                            self.networks[name] = {"subnet": addr, "mask_length": int(plen),
+                                                   "comments": comments}
+                    elif len(parts) >= 3:                          # IPv4: 'subnet a.b.c.d mask'
+                        subnet, mask = parts[1], parts[2]
+                        if mask_to_prefix(mask) == 0:
+                            self.any_aliases.add(name)             # 0.0.0.0/0 == "Any"
+                        else:
+                            self.networks[name] = {"subnet": subnet,
+                                                   "mask_length": mask_to_prefix(mask),
+                                                   "comments": comments}
                     else:
-                        self.networks[name] = {"subnet": subnet,
-                                               "mask_length": mask_to_prefix(mask),
-                                               "comments": comments}
+                        self.unsupported.append(f"object network: cannot parse '{t}'")
                 elif t.startswith("range "):
                     _, first, last = t.split()[:3]
                     self.ranges[name] = {"first": first, "last": last, "comments": comments}
@@ -452,6 +463,24 @@ class Converter:
                     self.unsupported.append(f"object-group protocol {name}: cannot parse '{t}'")
             self.svc_groups[name] = {"members": members, "comments": comments}
 
+        # icmp-type groups -> service group with the ICMP service-other (ip_protocol 1).
+        # Per-type granularity (echo, unreachable, ...) is NOT preserved; flagged below.
+        for obj in self.parse.find_objects(r"^object-group icmp-type "):
+            name = cp_name(obj.text.split("object-group icmp-type ", 1)[1])
+            comments = ""
+            types = []
+            for child in obj.children:
+                t = child.text.strip()
+                if t.startswith("description "):
+                    comments = t.split("description ", 1)[1]
+                elif t.startswith("icmp-object "):
+                    types.append(t.split("icmp-object ", 1)[1].strip())
+            self.svc_groups[name] = {"members": [self._auto_protocol("icmp")],
+                                     "comments": comments}
+            self.unsupported.append(
+                f"object-group icmp-type {name}: mapped to generic ICMP (types "
+                f"{', '.join(types) or 'none'} not preserved); review if type granularity needed")
+
     # ======================================================================
     # 5. ACCESS-LISTS  -> policy.yml
     # ======================================================================
@@ -460,7 +489,7 @@ class Converter:
         if not tokens:
             return ["Any"], tokens
         head = tokens[0]
-        if head == "any" or head == "any4" or head == "any6":
+        if head in ("any", "any4", "any6"):
             return ["Any"], tokens[1:]
         if head == "object":
             return [self._ref(cp_name(tokens[1]))], tokens[2:]
@@ -468,34 +497,62 @@ class Converter:
             return [cp_name(tokens[1])], tokens[2:]
         if head == "host":
             return [self._auto_host(tokens[1])], tokens[2:]
-        if re.match(r"\d+\.\d+\.\d+\.\d+", head) and len(tokens) > 1 and \
-           re.match(r"\d+\.\d+\.\d+\.\d+", tokens[1]):
+        if head == "interface":
+            self.unsupported.append(
+                f"acl: 'interface {tokens[1]}' used as an address -> mapped to Any; "
+                f"set to that gateway interface's IP object if needed")
+            return ["Any"], tokens[2:]
+        # a.b.c.d  m.m.m.m  (IPv4 subnet + mask)
+        if re.match(r"^\d+\.\d+\.\d+\.\d+$", head) and len(tokens) > 1 and \
+           re.match(r"^\d+\.\d+\.\d+\.\d+$", tokens[1]):
+            if mask_to_prefix(tokens[1]) == 0:
+                return ["Any"], tokens[2:]
             return [self._auto_network(head, tokens[1])], tokens[2:]
-        # fallback: treat as Any and flag
-        return ["Any"], tokens[1:]
+        # CIDR (IPv4 or IPv6)  a.b.c.d/n  or  2001:db8::/n  or ::/0
+        if "/" in head:
+            addr, plen = head.split("/", 1)
+            if plen == "0":
+                return ["Any"], tokens[1:]
+            if ":" in addr:
+                return [self._auto_network6(addr, plen)], tokens[1:]
+            return [self._auto_network(addr, prefix_to_mask(plen))], tokens[1:]
+        if ":" in head:                       # bare IPv6 host
+            return [self._auto_host(head)], tokens[1:]
+        return ["Any"], tokens[1:]             # fallback
 
-    def _resolve_service_tokens(self, proto, tokens):
-        """Parse trailing service spec of an ACL line into CP service object names."""
-        services = []
-        if not tokens:
-            services = ["Any"] if proto == "ip" else []
-            return services
-        head = tokens[0]
-        if head == "object-group":
-            return [cp_name(tokens[1])]
-        if head == "object":
-            return [cp_name(tokens[1])]
-        if head == "eq" and len(tokens) > 1:
-            if proto in ("tcp", "udp"):
-                return [self._auto_service(proto, tokens[1])]
-        if head == "range" and len(tokens) > 2 and proto in ("tcp", "udp"):
+    def _consume_ports(self, proto, tokens):
+        """If tokens begin a tcp/udp port spec, consume it and return
+        (service_names, remaining). Returns (None, tokens) when no port spec."""
+        if proto not in ("tcp", "udp") or not tokens:
+            return None, tokens
+        h = tokens[0]
+        bucket = self.svc_tcp if proto == "tcp" else self.svc_udp
+        if h == "eq" and len(tokens) > 1:
+            return [self._auto_service(proto, tokens[1])], tokens[2:]
+        if h == "range" and len(tokens) > 2:
             p1, _ = resolve_port(tokens[1])
             p2, _ = resolve_port(tokens[2])
             sname = cp_name(f"svc_{proto}_{p1}_{p2}")
-            bucket = self.svc_tcp if proto == "tcp" else self.svc_udp
-            bucket.setdefault(sname, {"port": f"{p1}-{p2}", "comments": "auto"})
-            return [sname]
-        return []
+            bucket.setdefault(sname, {"port": f"{p1}-{p2}", "comments": "auto: port range"})
+            return [sname], tokens[3:]
+        if h in ("lt", "gt") and len(tokens) > 1:
+            p, _ = resolve_port(tokens[1])
+            if p.isdigit():
+                rng = f"1-{int(p) - 1}" if h == "lt" else f"{int(p) + 1}-65535"
+                sname = cp_name(f"svc_{proto}_{h}_{p}")
+                bucket.setdefault(sname, {"port": rng, "comments": f"auto: {h} {p}"})
+                return [sname], tokens[2:]
+            self.unsupported.append(f"acl: port '{h} {tokens[1]}' not numeric; review")
+            return [], tokens[2:]
+        if h == "neq" and len(tokens) > 1:
+            self.unsupported.append(
+                f"acl: 'neq {tokens[1]}' port not representable as one CP service; review")
+            return [], tokens[2:]
+        if h == "object-group" and len(tokens) > 1 and cp_name(tokens[1]) in self.svc_groups:
+            return [cp_name(tokens[1])], tokens[2:]
+        if h == "object" and len(tokens) > 1 and cp_name(tokens[1]) in self._known_svc:
+            return [cp_name(tokens[1])], tokens[2:]
+        return None, tokens
 
     def parse_access_lists(self):
         # map access-list name -> interface/direction from access-group lines
@@ -515,21 +572,42 @@ class Converter:
             action_word = toks[3]
             proto = toks[4]
             rest = toks[5:]
+            inactive = "inactive" in toks
+
+            # protocol given as a service object/group:  '... permit object SVC src dst'
+            svc_from_proto = None
+            if proto in ("object", "object-group") and rest:
+                svc_from_proto = [cp_name(rest[0])]
+                rest = rest[1:]
+
             src, rest = self._resolve_addr_tokens(rest)
+            src_ports, rest = self._consume_ports(proto, rest)   # optional source port
+            if src_ports:
+                self.unsupported.append(
+                    f"acl {aclname}: source-port match ({src_ports}) not represented in the "
+                    f"Check Point service (service matches destination port); review")
             dst, rest = self._resolve_addr_tokens(rest)
-            svc = self._resolve_service_tokens(proto, rest)
-            # protocol-level service when no port object (icmp / ip / explicit proto)
-            if not svc:
-                if proto == "ip":
+            svc, rest = self._consume_ports(proto, rest)         # optional destination port
+
+            if svc_from_proto is not None:
+                svc = svc_from_proto
+            elif svc is None:                                    # no explicit port -> protocol level
+                if proto in ("icmp", "icmp6"):
+                    svc = ["icmp-proto"]                         # remapped to cp_icmp_service in play
+                elif proto in ("ip", "tcp", "udp"):
                     svc = ["Any"]
-                elif proto == "icmp":
-                    svc = ["icmp-proto"]   # CP predefined; see playbook note
-                elif proto in ("tcp", "udp"):
-                    svc = ["Any"]          # any tcp/udp port
                 else:
                     svc = ["Any"]
-                    self.unsupported.append(f"acl {aclname}: protocol '{proto}' mapped to Any service; review")
+                    self.unsupported.append(
+                        f"acl {aclname}: protocol '{proto}' mapped to Any service; review")
+            if "time-range" in toks:
+                self.unsupported.append(
+                    f"acl {aclname}: time-range not migrated (Check Point uses time objects); review")
+
             counters[aclname] = counters.get(aclname, 0) + 1
+            note = f"migrated from access-list {aclname} ({binding.get(aclname, 'unbound')})"
+            if inactive:
+                note += " [was inactive]"
             self.rules.append({
                 "acl": aclname,
                 "name": f"{aclname}-{counters[aclname]}",
@@ -538,9 +616,8 @@ class Converter:
                 "destination": dst,
                 "service": svc,
                 "binding": binding.get(aclname, ""),
-                "enabled": True,
-                "comments": f"migrated from access-list {aclname} "
-                            f"({binding.get(aclname,'unbound')})",
+                "enabled": not inactive,
+                "comments": note,
             })
 
     # ======================================================================
@@ -612,7 +689,30 @@ class Converter:
             self.nat_rules.append(rule)
 
     # ======================================================================
+    # ======================================================================
+    # 7. INTERFACES -> security zones
+    # ======================================================================
+    def parse_interfaces(self):
+        """Each Cisco interface 'nameif' becomes a Check Point security zone.
+        Zones are created but NOT auto-wired into rules; each rule records its
+        access-group interface binding in its comment for manual zoning."""
+        for obj in self.parse.find_objects(r"^interface "):
+            nameif = seclevel = None
+            for c in obj.children:
+                ct = c.text.strip()
+                if ct.startswith("nameif "):
+                    nameif = ct.split("nameif ", 1)[1].strip()
+                elif ct.startswith("security-level "):
+                    seclevel = ct.split("security-level ", 1)[1].strip()
+            if nameif:
+                hw = obj.text.split("interface ", 1)[1].strip()
+                note = f"from Cisco interface {hw} (nameif {nameif})"
+                if seclevel is not None:
+                    note += f", security-level {seclevel}"
+                self.zones[cp_name(nameif)] = {"comments": note}
+
     def run(self):
+        self.parse_interfaces()
         self.parse_network_objects()
         self.parse_service_objects()
         self.parse_network_groups()
@@ -641,6 +741,8 @@ class Converter:
                                        ip_address_last=v["last"], comments=v["comments"])
                                   for n, v in self.ranges.items()],
             "cp_dns_domains": self._dns_domain_list(),
+            "cp_security_zones": [dict(name=n, comments=v["comments"])
+                                  for n, v in self.zones.items()],
         }
         groups = {"cp_network_groups": [dict(name=n, members=dedup(v["members"]),
                                              comments=v["comments"])
@@ -684,6 +786,7 @@ class Converter:
         for obj in p.find_objects(r"^object network "):
             obj_nat += sum(1 for c in obj.children if c.text.strip().startswith("nat ("))
         return OrderedDict([
+            ("interface (nameif)", len(p.find_objects(r"^interface "))),
             ("object network", len(p.find_objects(r"^object network "))),
             ("object service", len(p.find_objects(r"^object service "))),
             ("object-group network", len(p.find_objects(r"^object-group network "))),
@@ -705,6 +808,7 @@ class Converter:
         return OrderedDict([
             ("source", self.source_counts()),
             ("converted", OrderedDict([
+                ("security_zones", len(objects["cp_security_zones"])),
                 ("hosts", len(objects["cp_hosts"])),
                 ("networks", len(objects["cp_networks"])),
                 ("address_ranges", len(objects["cp_address_ranges"])),
