@@ -66,6 +66,10 @@
             task_results:
               - "{{ r_u_nat }}"
 
+        - name: Publish NAT deletions (when cp_publish=true)
+          check_point.mgmt.cp_mgmt_publish:
+          when: cp_publish | bool
+
     # ---- 2. Access rules ---------------------------------------------------
     - name: "Undo access rules"
       tags: [policy]
@@ -92,6 +96,10 @@
             report_action: "delete"
             task_results:
               - "{{ r_u_rules }}"
+
+        - name: Publish access-rule deletions (when cp_publish=true)
+          check_point.mgmt.cp_mgmt_publish:
+          when: cp_publish | bool
 
     # ---- 3. Services (groups first, then members) --------------------------
     - name: "Undo services"
@@ -164,6 +172,10 @@
               - "{{ r_u_udp }}"
               - "{{ r_u_tcp }}"
 
+        - name: Publish service deletions (when cp_publish=true)
+          check_point.mgmt.cp_mgmt_publish:
+          when: cp_publish | bool
+
     # ---- 4. Network object-groups ------------------------------------------
     - name: "Undo network object-groups"
       tags: [object-groups, groups]
@@ -189,6 +201,10 @@
             report_action: "delete"
             task_results:
               - "{{ r_u_groups }}"
+
+        - name: Publish group deletions (when cp_publish=true)
+          check_point.mgmt.cp_mgmt_publish:
+          when: cp_publish | bool
 
     # ---- 5. Network objects ------------------------------------------------
     - name: "Undo network objects"
@@ -276,11 +292,10 @@
               - "{{ r_u_hosts }}"
               - "{{ r_u_zones }}"
 
+        - name: Publish object/zone deletions (when cp_publish=true)
+          check_point.mgmt.cp_mgmt_publish:
+          when: cp_publish | bool
+
     - name: Write apply summary
       tags: [always]
       ansible.builtin.include_tasks: tasks/write_apply_summary.yml
-
-    - name: Publish session (only when cp_publish=true)
-      tags: [always]
-      check_point.mgmt.cp_mgmt_publish:
-      when: cp_publish | bool
