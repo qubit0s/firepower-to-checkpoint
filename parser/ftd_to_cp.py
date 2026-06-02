@@ -947,8 +947,11 @@ class Converter:
         for r in self.nat_rules:
             for k in ("original_source", "original_destination",
                       "translated_source", "translated_destination"):
+                # A NAT field that resolves to Any (e.g. a 0.0.0.0/0 object) must be
+                # OMITTED, not set to the literal 'Any' object: Check Point NAT rejects
+                # 'Any' with 404. A blank NAT field already means "any".
                 if r.get(k) in self.any_aliases:
-                    r[k] = "Any"
+                    r.pop(k, None)
 
         # --- service groups ---
         changed = True
@@ -984,6 +987,17 @@ class Converter:
             for k in ("original_service", "translated_service"):
                 if r.get(k):
                     r[k] = cp_service_ref(r[k])
+
+    def _sanitize_nat_any(self):
+        """Final guard: a Check Point NAT rule field can never hold the literal
+        'Any' object (it 404s). No matter how 'Any' got into a field (an 'any'
+        token, a 0.0.0.0/0 object, an any-collapsed group), strip it -- a blank
+        NAT field already means "any"."""
+        for r in self.nat_rules:
+            for k in ("original_source", "original_destination", "original_service",
+                      "translated_source", "translated_destination", "translated_service"):
+                if r.get(k) == "Any":
+                    r.pop(k, None)
 
     def _check_references(self):
         """Flag references to objects that were never created (parser gap or a
@@ -1041,6 +1055,7 @@ class Converter:
         self.parse_nat()
         self._apply_service_aliases()
         self._resolve_any_groups()
+        self._sanitize_nat_any()
         self._check_references()
 
     # ---- YAML emit ---------------------------------------------------------
