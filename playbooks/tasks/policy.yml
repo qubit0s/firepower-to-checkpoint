@@ -3,11 +3,28 @@
 # Point policy package (access: true auto-creates the "<package> Network" layer);
 # rules go into their package's layer. Consumes ../vars/4_policy.yml. Does not publish.
 
-- name: Create policy packages (one per Cisco ACL)
+- name: Create access layers (one per Cisco ACL; "<package> Network")
+  check_point.mgmt.cp_mgmt_access_layer:
+    name: "{{ item.name }} Network"
+    firewall: true
+    comments: "{{ item.comments | default('') }}"
+    color: "{{ cp_default_color }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_packages | default([]) }}"
+  loop_control:
+    label: "{{ item.name }} Network"
+  register: r_layers
+  ignore_errors: true
+
+- name: Create policy packages (one per Cisco ACL) using that layer
   check_point.mgmt.cp_mgmt_package:
     name: "{{ item.name }}"
     access: true
     threat_prevention: false
+    access_layers:
+      value:
+        - "{{ item.name }} Network"
     comments: "{{ item.comments | default('') }}"
     color: "{{ cp_default_color }}"
     state: present
@@ -46,6 +63,7 @@
   vars:
     stage_name: "4_policy"
     task_results:
+      - "{{ r_layers }}"
       - "{{ r_packages }}"
       - "{{ r_rules }}"
 
