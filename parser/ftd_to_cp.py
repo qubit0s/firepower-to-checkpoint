@@ -614,7 +614,11 @@ def main():
     for p in written:
         print("  " + p)
     if conv.unsupported:
-        print("\n[!] Items needing manual review were written to _review_unsupported.yml")
+        items = sorted(set(conv.unsupported))
+        print(f"\n[!] {len(items)} item(s) need manual review "
+              f"(also in _review_unsupported.yml):")
+        for line in items:
+            print("    - " + line)
 
 
 if __name__ == "__main__":
