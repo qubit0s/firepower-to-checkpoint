@@ -28,6 +28,8 @@
     destination: "{{ item.destination }}"
     # Map the placeholder icmp service name to the configured one.
     service: "{{ item.service | map('replace', 'icmp-proto', cp_icmp_service) | list }}"
+    track:
+      type: "{{ cp_rule_track | default('Log') }}"
     enabled: "{{ item.enabled | default(true) }}"
     comments: "{{ item.comments | default('') }}"
     state: present

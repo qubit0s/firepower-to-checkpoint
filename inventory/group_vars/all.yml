@@ -18,6 +18,8 @@
 #
 # Policy package that migrated NAT rules are written into.
 cp_nat_package: "Standard"
+# Track setting for every migrated access rule (Log / None / Extended Log / Detailed Log).
+cp_rule_track: "Log"
 
 # --- Defaults applied to created objects -------------------------------------
 cp_default_color: "black"
