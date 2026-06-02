@@ -26,7 +26,11 @@
   check_point.mgmt.cp_mgmt_access_rule:
     layer: "{{ item.layer }}"
     name: "{{ item.name }}"
-    position: "{{ rule_index + 1 }}"
+    # Append to the bottom of the explicit rulebase. Looping in ACL order with
+    # position: bottom preserves order and keeps rules above the implicit cleanup
+    # rule. (A numeric position climbs past the layer's rule count -> "Invalid
+    # value [N], should be [1-M]".)
+    position: bottom
     action: "{{ item.action }}"
     source: "{{ item.source }}"
     destination: "{{ item.destination }}"
@@ -41,7 +45,6 @@
   loop: "{{ cp_access_rules | default([]) }}"
   loop_control:
     label: "{{ item.name }} ({{ item.action }})"
-    index_var: rule_index
   register: r_rules
   ignore_errors: true
 
