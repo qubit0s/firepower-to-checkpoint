@@ -825,7 +825,10 @@ class Converter:
                 self.unsupported.append(
                     f"interface '{nameif}': no IPv4 address -> no network group created (skipped)")
                 continue
-            gname = cp_name(nameif)
+            # Always suffix '_net' so the interface group can't clash with an existing
+            # object/zone of the same nameif (config objects, or zones left by earlier
+            # runs). These groups aren't referenced elsewhere, so the name is free.
+            gname = cp_name(nameif) + "_net"
             self.net_groups[gname] = {"members": [self._auto_network(ip, mask)], "comments": note}
             self.iface_groups.add(gname)
 
@@ -928,24 +931,6 @@ class Converter:
                     self.unsupported.append(
                         f"nat rule {r['name']}: undefined object '{x}' in {k}")
 
-    def _fix_iface_group_collisions(self):
-        """Check Point names are globally unique across object types. An interface
-        group named like an existing host/network/range/service (common in FTD,
-        where an interface IP object shares the nameif) would clash, so rename the
-        interface group with a '_net' suffix. These groups aren't referenced, so no
-        reference updates are needed."""
-        others = (set(self.hosts) | set(self.networks) | set(self.ranges)
-                  | set(self.svc_tcp) | set(self.svc_udp) | set(self.svc_other))
-        for gname in list(self.iface_groups):
-            if gname in others:
-                newname = gname + "_net"
-                self.net_groups[newname] = self.net_groups.pop(gname)
-                self.iface_groups.discard(gname)
-                self.iface_groups.add(newname)
-                self.unsupported.append(
-                    f"interface group '{gname}' renamed to '{newname}' "
-                    f"(name already used by another object); not created under the original name")
-
     def run(self):
         self.parse_interfaces()
         self.parse_network_objects()
@@ -954,7 +939,6 @@ class Converter:
         self.parse_service_groups()
         self.parse_access_lists()
         self.parse_nat()
-        self._fix_iface_group_collisions()
         self._resolve_any_groups()
         self._check_references()
 
