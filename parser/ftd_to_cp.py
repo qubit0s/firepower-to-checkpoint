@@ -112,18 +112,40 @@ PREDEFINED_SERVICES = {
     "ftp", "ftp_bidir", "ftp-port", "ftp-pasv", "http", "https", "ssh", "telnet",
     "smtp", "pop-3", "pop3", "imap", "nntp", "ntp", "ntp-udp", "snmp", "snmp-trap",
     "ldap", "ldap-udp", "ldap-ssl", "rdp", "kerberos", "kerberos_v5_tcp", "radius",
-    "radius-acct", "tacacs", "sip", "sip_any", "h323", "rtsp", "dns", "domain-tcp",
-    "domain-udp", "dns_tcp", "dns_udp", "tftp", "syslog", "echo-request", "icmp-proto",
+    "radius-acct", "tacacs", "sip", "sip_any", "h323", "rtsp", "domain-tcp",
+    "domain-udp", "tftp", "syslog", "echo-request", "icmp-proto",
     "netbios-ns", "netbios-dgm", "netbios-ssn", "nbname", "nbdatagram", "nbsession",
     "microsoft-ds", "ms-sql-s", "ms-sql-m", "gre", "esp", "ah", "ospf", "bgp", "rip",
     "pim", "igmp", "vrrp", "sqlnet1", "sqlnet2", "ica", "finger", "gopher", "whois",
     "lpd", "ident", "daytime", "discard", "irc", "uucp", "ica-browsing",
 }
 
+# Cisco/FMC service names whose Check Point predefined equivalent has a DIFFERENT
+# name. Many are FMC "system" service objects that are referenced in the ACL but
+# never written as an 'object service' line, so the parser has nothing to create
+# -- the reference must be rewritten to the Check Point built-in or it fails
+# 'object not found'. Keys are lower-cased; values are exact Check Point names.
+SERVICE_ALIASES = {
+    "dns": "domain-udp",
+    "dns_udp": "domain-udp",
+    "dns_tcp": "domain-tcp",
+    "dns_over_udp": "domain-udp",
+    "dns_over_tcp": "domain-tcp",
+}
+
 
 def is_predef_service(name):
-    """True if name collides with a Check Point predefined service (reuse built-in)."""
-    return name.lower() in PREDEFINED_SERVICES
+    """True if the name should reuse a Check Point built-in instead of being
+    created -- either it matches a predefined name directly, or it is a known
+    alias of one (see SERVICE_ALIASES)."""
+    n = name.lower()
+    return n in PREDEFINED_SERVICES or n in SERVICE_ALIASES
+
+
+def cp_service_ref(name):
+    """Map a service reference to the Check Point name to use: an aliased name
+    (e.g. DNS_UDP -> domain-udp) if known, otherwise the name unchanged."""
+    return SERVICE_ALIASES.get(name.lower(), name)
 
 
 def cp_name(raw):
@@ -900,6 +922,20 @@ class Converter:
         for r in self.rules:
             r["service"] = dedup(["Any" if x in self.svc_any_aliases else x for x in r["service"]])
 
+    def _apply_service_aliases(self):
+        """Rewrite service references whose Cisco/FMC name differs from the Check
+        Point predefined name (e.g. DNS_UDP -> domain-udp) so they resolve to the
+        built-in instead of failing 'object not found'. Covers rule services,
+        service-group members, and NAT service fields."""
+        for r in self.rules:
+            r["service"] = [cp_service_ref(s) for s in r["service"]]
+        for v in self.svc_groups.values():
+            v["members"] = [cp_service_ref(m) for m in v["members"]]
+        for r in self.nat_rules:
+            for k in ("original_service", "translated_service"):
+                if r.get(k):
+                    r[k] = cp_service_ref(r[k])
+
     def _check_references(self):
         """Flag references to objects that were never created (parser gap or a
         reference undefined in the config). Dangling group MEMBERS are dropped so
@@ -954,6 +990,7 @@ class Converter:
         self.parse_service_groups()
         self.parse_access_lists()
         self.parse_nat()
+        self._apply_service_aliases()
         self._resolve_any_groups()
         self._check_references()
 
@@ -986,7 +1023,11 @@ class Converter:
         # (references resolve to the built-in). Flag each as auto-handled.
         for n in set(list(self.svc_tcp) + list(self.svc_udp)
                      + list(self.svc_other) + list(self.svc_groups)):
-            if is_predef_service(n):
+            if n.lower() in SERVICE_ALIASES:
+                self.unsupported.append(
+                    f"service '{n}': mapped to Check Point predefined "
+                    f"'{SERVICE_ALIASES[n.lower()]}' (not created)")
+            elif is_predef_service(n):
                 self.unsupported.append(
                     f"service '{n}': reusing Check Point predefined (not created)")
         services = {
