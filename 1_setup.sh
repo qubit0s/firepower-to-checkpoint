@@ -26,17 +26,19 @@ ansible-galaxy collection install -r requirements.yml -p ./collections
 
 echo "==> 4/4  Finalising"
 chmod +x 2_parse.sh 3_apply.sh 2>/dev/null || true
-echo "    edit inventory/hosts.ini with your Smart-1 Cloud details (next step)"
+echo "    edit inventory/hosts.ini with your connection details (next step)"
 
 cat <<'DONE'
 
 Setup complete.
 
 Next steps:
-  3) Edit inventory/hosts.ini   -> tenant host, API key, cloud management id
-  4) Parse your config          -> ./2_parse.sh /path/to/show-running-config.txt
+  a) Edit inventory/hosts.ini   -> mgmt host + ONE auth block:
+                                   Smart-1 Cloud (api key + cloud id) or
+                                   on-prem (api key, or user/password)
+  b) Parse your config          -> ./2_parse.sh /path/to/show-running-config.txt
        then review              -> vars/*.yml  and  vars/_review_unsupported.yml
-  5) Apply                      -> ./3_apply.sh            (all stages)
+  c) Apply                      -> ./3_apply.sh            (all stages, one session)
                                    ./3_apply.sh objects    (one stage)
                                    ./3_apply.sh objects -C (dry-run / check mode)
 
