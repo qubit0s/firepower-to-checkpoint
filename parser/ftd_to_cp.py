@@ -78,8 +78,8 @@ PROTOCOL_NAMES = {
 # Flags whose message contains one of these are "auto-handled (FYI)" -- a safe
 # transformation the parser made; everything else is "needs your attention".
 HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP",
-                   "reusing Check Point predefined", "not selected for conversion",
-                   "no network group created", "renamed to")
+                   "reusing Check Point predefined", "mapped to Check Point predefined",
+                   "not selected for conversion", "no network group created", "renamed to")
 
 _USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
