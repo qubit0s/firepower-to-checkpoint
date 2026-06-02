@@ -2,16 +2,25 @@
 # ===========================================================================
 # 2_parse.sh -- convert a Cisco FTD `show running-config` into vars/*.yml
 #
-#   ./2_parse.sh /path/to/show-running-config.txt
-#   ./2_parse.sh                       # defaults to samples/ftd_running-config.txt
+#   ./2_parse.sh /path/to/show-running-config.txt [--acls A,B]
+#
+# The config path is REQUIRED -- the script never falls back to the bundled
+# demo, so you can't accidentally parse/apply the sample against a real mgmt.
+# (To try the demo on purpose: ./2_parse.sh samples/ftd_running-config.txt)
 # ===========================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CONFIG="${1:-samples/ftd_running-config.txt}"
+if [ "$#" -lt 1 ] || [ -z "${1:-}" ]; then
+  echo "ERROR: no config file given."
+  echo "Usage: ./2_parse.sh /path/to/show-running-config.txt [--acls A,B]"
+  echo "       (to test with the bundled demo: ./2_parse.sh samples/ftd_running-config.txt)"
+  exit 1
+fi
+CONFIG="$1"
 if [ ! -f "$CONFIG" ]; then
   echo "ERROR: config file not found: $CONFIG"
-  echo "Usage: ./2_parse.sh /path/to/show-running-config.txt"
+  echo "Usage: ./2_parse.sh /path/to/show-running-config.txt [--acls A,B]"
   exit 1
 fi
 if [ ! -x ".venv/bin/python" ]; then
