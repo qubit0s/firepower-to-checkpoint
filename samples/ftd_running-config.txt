@@ -106,6 +106,8 @@ access-list CSM_FW_ACL_ remark rule-id 268441883: ACCESS POLICY: DC1-FTD-ACP - M
 access-list CSM_FW_ACL_ remark rule-id 268441883: L7 RULE: inbound-web-policy
 access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object HOST_web01 object-group GRP_web_ports rule-id 268441883
 access-list CSM_FW_ACL_ advanced permit ip ifc inside any ifc outside any rule-id 268441884
+access-list CSM_FW_ACL_ advanced permit gre any any rule-id 268441885
+access-list CSM_FW_ACL_ advanced permit 41 any any rule-id 268441886
 access-group CSM_FW_ACL_ global
 access-list ACL_inside_in extended permit tcp object-group GRP_internal_nets object HOST_web01 object-group GRP_web_ports
 access-list ACL_inside_in extended permit udp object NET_internal any object-group GRP_dns_ports

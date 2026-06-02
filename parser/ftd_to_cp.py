@@ -673,8 +673,14 @@ class Converter:
                 elif proto in ("ip", "tcp", "udp"):
                     svc = ["Any"]
                 else:
-                    svc = ["Any"]
-                    self.unsupported.append(f"acl {aclname}: protocol '{proto}' -> Any; review")
+                    # named/numeric IP protocol (gre, ipinip, esp, 41, ...) -> service-other
+                    member = self._auto_protocol(proto)
+                    if member:
+                        svc = [member]
+                    else:
+                        svc = ["Any"]
+                        self.unsupported.append(
+                            f"acl {aclname}: unknown protocol '{proto}' -> Any; review")
 
             # interface (ifc) qualifiers are NOT wired into the rule (no zones in
             # the rulebase); they're recorded in the comment for reference.
