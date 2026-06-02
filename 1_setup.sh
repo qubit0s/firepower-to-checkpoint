@@ -37,7 +37,7 @@ Next steps:
                                    Smart-1 Cloud (api key + cloud id) or
                                    on-prem (api key, or user/password)
   b) Parse your config          -> ./2_parse.sh /path/to/show-running-config.txt
-       then review              -> vars/*.yml  and  vars/_review_unsupported.yml
+       then review              -> vars/*.yml  and  reports/parse_summary.md
   c) Apply                      -> ./3_apply.sh            (all stages, one session)
                                    ./3_apply.sh objects    (one stage)
                                    ./3_apply.sh objects -C (dry-run / check mode)
