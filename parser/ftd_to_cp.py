@@ -780,15 +780,17 @@ class Converter:
             if kind == "dynamic" and mapped_src == "interface":
                 rule["translated_source"] = "interface"
                 rule["hide_behind"] = "gateway"
-            else:
-                rule["translated_source"] = "Original" if mapped_src == real_src else cp_name(mapped_src)
+            elif mapped_src != real_src:                 # real translation
+                rule["translated_source"] = cp_name(mapped_src)
+            # else identity (no translation) -> omit translated_source entirely
             if m.group(6):  # destination static REAL MAPPED
                 rule["original_destination"] = cp_name(m.group(6))
-                rule["translated_destination"] = ("Original" if m.group(7) == m.group(6)
-                                                  else cp_name(m.group(7)))
+                if m.group(7) != m.group(6):
+                    rule["translated_destination"] = cp_name(m.group(7))
             if m.group(8):  # service REAL MAPPED
                 rule["original_service"] = cp_name(m.group(8))
-                rule["translated_service"] = cp_name(m.group(9))
+                if m.group(9) != m.group(8):
+                    rule["translated_service"] = cp_name(m.group(9))
             self.nat_rules.append(rule)
 
     # ======================================================================

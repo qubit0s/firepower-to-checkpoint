@@ -10,15 +10,17 @@
     position: "{{ nat_index + 1 }}"
     enabled: "{{ item.enabled | default(true) }}"
     method: "{{ item.method }}"
-    original_source: "{{ item.original_source }}"
-    original_destination: "{{ item.original_destination | default('Original') }}"
-    original_service: "{{ item.original_service | default('Original') }}"
+    # Omit untranslated fields entirely (Check Point treats absent = "Original";
+    # it does NOT accept the literal string "Original" as an object).
+    original_source: "{{ item.original_source | default(omit) }}"
+    original_destination: "{{ item.original_destination | default(omit) }}"
+    original_service: "{{ item.original_service | default(omit) }}"
     # 'interface' (Cisco PAT) -> hide behind the configured gateway object.
     translated_source: >-
-      {{ cp_hide_behind_object if item.translated_source | default('Original') == 'interface'
-         else item.translated_source | default('Original') }}
-    translated_destination: "{{ item.translated_destination | default('Original') }}"
-    translated_service: "{{ item.translated_service | default('Original') }}"
+      {{ cp_hide_behind_object if (item.translated_source | default('')) == 'interface'
+         else (item.translated_source | default(omit)) }}
+    translated_destination: "{{ item.translated_destination | default(omit) }}"
+    translated_service: "{{ item.translated_service | default(omit) }}"
     comments: "{{ item.comments | default('') }}"
     state: present
     ignore_warnings: true
