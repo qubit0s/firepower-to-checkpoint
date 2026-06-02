@@ -85,14 +85,33 @@ def warn(msg):
     print("  [warn] " + msg, file=sys.stderr)
 
 
+# Check Point predefined/reserved object names (case-insensitive) that a migrated
+# object/group must not reuse, or the API errors "more than one object named X".
+RESERVED_NAMES = {"any", "all", "none", "internet", "all_internet"}
+
+
 def cp_name(raw):
     """Sanitise a Cisco identifier into a legal Check Point object name.
     Check Point names may not contain spaces and a limited punctuation set;
-    we keep [A-Za-z0-9_.-] and replace everything else with '_'."""
+    we keep [A-Za-z0-9_.-] and replace everything else with '_'. Names that
+    collide with a Check Point reserved name (e.g. 'any') get an '_obj' suffix."""
     name = re.sub(r"[^A-Za-z0-9_.\-]", "_", raw.strip())
     if name and name[0].isdigit():
         name = "obj_" + name
-    return name or "obj_unnamed"
+    name = name or "obj_unnamed"
+    if name.lower() in RESERVED_NAMES:
+        name = name + "_obj"
+    return name
+
+
+def dedup(seq):
+    """Return list with duplicates removed, preserving order."""
+    seen, out = set(), []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
 
 def mask_to_prefix(mask):
@@ -132,6 +151,12 @@ class Converter:
         # bookkeeping: which object names are network-ish vs service-ish
         self._known_net = set()
         self._known_svc = set()
+        # named objects that are 0.0.0.0/0 -> resolve references to predefined "Any"
+        self.any_aliases = set()
+
+    def _ref(self, name):
+        """Resolve a network-object reference, mapping 0.0.0.0/0 aliases to 'Any'."""
+        return "Any" if name in self.any_aliases else name
 
     # ---- auto-object helpers (for inline literals) -------------------------
     def _auto_host(self, ip):
@@ -143,6 +168,8 @@ class Converter:
 
     def _auto_network(self, subnet, mask):
         plen = mask_to_prefix(mask)
+        if plen == 0:
+            return "Any"   # 0.0.0.0/0 == Check Point predefined "Any"
         name = cp_name(f"n_{subnet}_{plen if plen is not None else mask}")
         if name not in self.networks:
             self.networks[name] = {"subnet": subnet, "mask_length": plen,
@@ -209,9 +236,13 @@ class Converter:
                     self.hosts[name] = {"ip_address": t.split()[1], "comments": comments}
                 elif t.startswith("subnet "):
                     _, subnet, mask = t.split()[:3]
-                    self.networks[name] = {"subnet": subnet,
-                                           "mask_length": mask_to_prefix(mask),
-                                           "comments": comments}
+                    if mask_to_prefix(mask) == 0:
+                        # 0.0.0.0/0 named object == "Any"; alias references to it.
+                        self.any_aliases.add(name)
+                    else:
+                        self.networks[name] = {"subnet": subnet,
+                                               "mask_length": mask_to_prefix(mask),
+                                               "comments": comments}
                 elif t.startswith("range "):
                     _, first, last = t.split()[:3]
                     self.ranges[name] = {"first": first, "last": last, "comments": comments}
@@ -271,7 +302,7 @@ class Converter:
                     comments = t.split("description ", 1)[1]
                     continue
                 if t.startswith("network-object object "):
-                    members.append(cp_name(t.split("network-object object ", 1)[1]))
+                    members.append(self._ref(cp_name(t.split("network-object object ", 1)[1])))
                 elif t.startswith("group-object "):
                     members.append(cp_name(t.split("group-object ", 1)[1]))
                 elif t.startswith("network-object host "):
@@ -376,7 +407,7 @@ class Converter:
         if head == "any" or head == "any4" or head == "any6":
             return ["Any"], tokens[1:]
         if head == "object":
-            return [cp_name(tokens[1])], tokens[2:]
+            return [self._ref(cp_name(tokens[1]))], tokens[2:]
         if head == "object-group":
             return [cp_name(tokens[1])], tokens[2:]
         if head == "host":
@@ -553,14 +584,14 @@ class Converter:
                                     fqdn=v["fqdn"], comments=v["comments"])
                                for n, v in self.fqdns.items()],
         }
-        groups = {"cp_network_groups": [dict(name=n, members=v["members"],
+        groups = {"cp_network_groups": [dict(name=n, members=dedup(v["members"]),
                                              comments=v["comments"])
                                         for n, v in self.net_groups.items()]}
         services = {
             "cp_services_tcp": [dict(name=n, **v) for n, v in self.svc_tcp.items()],
             "cp_services_udp": [dict(name=n, **v) for n, v in self.svc_udp.items()],
             "cp_services_other": [dict(name=n, **v) for n, v in self.svc_other.items()],
-            "cp_service_groups": [dict(name=n, members=v["members"], comments=v["comments"])
+            "cp_service_groups": [dict(name=n, members=dedup(v["members"]), comments=v["comments"])
                                   for n, v in self.svc_groups.items()],
         }
         policy = {"cp_access_rules": self.rules}
