@@ -1,0 +1,37 @@
+---
+# Stage tasks: NAT rules (cp_mgmt_nat_rule) into cp_nat_package.
+# Included by 5_nat.yml (own session) and by site.yml (shared session).
+# Consumes vars from ../vars/5_nat.yml. Does not publish.
+
+- name: Create NAT rules (in original order)
+  check_point.mgmt.cp_mgmt_nat_rule:
+    package: "{{ cp_nat_package }}"
+    name: "{{ item.name }}"
+    position: "{{ nat_index + 1 }}"
+    enabled: "{{ item.enabled | default(true) }}"
+    method: "{{ item.method }}"
+    original_source: "{{ item.original_source }}"
+    original_destination: "{{ item.original_destination | default('Original') }}"
+    original_service: "{{ item.original_service | default('Original') }}"
+    # 'interface' (Cisco PAT) -> hide behind the configured gateway object.
+    translated_source: >-
+      {{ cp_hide_behind_object if item.translated_source | default('Original') == 'interface'
+         else item.translated_source | default('Original') }}
+    translated_destination: "{{ item.translated_destination | default('Original') }}"
+    translated_service: "{{ item.translated_service | default('Original') }}"
+    comments: "{{ item.comments | default('') }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_nat_rules | default([]) }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.method }})"
+    index_var: nat_index
+  register: r_nat
+  ignore_errors: true
+
+- name: Record NAT rules that failed to import
+  ansible.builtin.include_tasks: record_not_imported.yml
+  vars:
+    stage_name: "5_nat"
+    task_results:
+      - "{{ r_nat }}"

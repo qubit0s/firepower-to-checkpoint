@@ -1,17 +1,11 @@
 ---
 # ===========================================================================
-# Playbook: nat
-# Creates Check Point NAT rules migrated from Cisco object (auto) NAT and
-# manual (twice) NAT. Rules go into the policy package named by `cp_nat_package`.
-# The objects they reference must already exist (run objects/object-groups first).
-#
-# Idempotency: on R81+ management, cp_mgmt_nat_rule requires a unique `name`, so
-# rules are keyed by name and re-running this playbook updates rather than appends.
-# `position` controls ordering only. Review ../vars/5_nat.yml and the resulting NAT
-# rulebase after the first run. "Hide behind interface" (Cisco PAT) is mapped to
-# hide-NAT behind `cp_hide_behind_object`.
-# Consumes: ../vars/5_nat.yml
-# Run:  ansible-playbook playbooks/nat.yml
+# Stage 5: NAT rules (own session).
+# Consumes ../vars/5_nat.yml. Publishes only when cp_publish=true.
+# On R81+ cp_mgmt_nat_rule requires a unique name, so rules are keyed by name
+# (re-running updates rather than appends); position controls ordering only.
+# "Hide behind interface" (Cisco PAT) maps to hide-NAT behind cp_hide_behind_object.
+# Run:  ./3_apply.sh nat   (or ansible-playbook playbooks/5_nat.yml)
 # ===========================================================================
 - name: "FTD -> Check Point :: NAT rules"
   hosts: checkpoint
@@ -19,40 +13,9 @@
   gather_facts: false
   vars_files:
     - ../vars/5_nat.yml
-
   tasks:
-    - name: Create NAT rules (in original order)
-      check_point.mgmt.cp_mgmt_nat_rule:
-        package: "{{ cp_nat_package }}"
-        name: "{{ item.name }}"
-        position: "{{ nat_index + 1 }}"
-        enabled: "{{ item.enabled | default(true) }}"
-        method: "{{ item.method }}"
-        original_source: "{{ item.original_source }}"
-        original_destination: "{{ item.original_destination | default('Original') }}"
-        original_service: "{{ item.original_service | default('Original') }}"
-        # 'interface' (Cisco PAT) -> hide behind the configured gateway object.
-        translated_source: >-
-          {{ cp_hide_behind_object if item.translated_source | default('Original') == 'interface'
-             else item.translated_source | default('Original') }}
-        translated_destination: "{{ item.translated_destination | default('Original') }}"
-        translated_service: "{{ item.translated_service | default('Original') }}"
-        comments: "{{ item.comments | default('') }}"
-        state: present
-        ignore_warnings: true
-      loop: "{{ cp_nat_rules | default([]) }}"
-      loop_control:
-        label: "{{ item.name }} ({{ item.method }})"
-        index_var: nat_index
-      register: r_nat
-      ignore_errors: true
-
-    - name: Record items that failed to import
-      ansible.builtin.include_tasks: tasks/record_not_imported.yml
-      vars:
-        stage_name: "5_nat"
-        task_results:
-          - "{{ r_nat }}"
+    - name: Import NAT rules
+      ansible.builtin.include_tasks: tasks/nat.yml
 
     - name: Publish session
       check_point.mgmt.cp_mgmt_publish:

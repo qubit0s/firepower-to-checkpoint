@@ -20,10 +20,17 @@ cp_nat_package: "Standard"
 cp_default_color: "black"
 
 # --- Publish behaviour --------------------------------------------------------
-# When true, each playbook publishes its session at the end (recommended so you
-# can review each category's changes as a discrete publish). Set false to leave
-# the session open (e.g. when chaining via site.yml and publishing once).
-cp_publish: true
+# Default FALSE: the playbooks create all objects/rules but do NOT publish, so
+# you can log in to SmartConsole, review the session (Manage & Settings >
+# Sessions), and publish manually. Set true to auto-publish at the end of a run.
+#
+# IMPORTANT: Check Point sessions are private until published, so unpublished
+# changes are only visible within the session that made them. Run the full
+# migration via `site.yml` (single session) when leaving changes unpublished --
+# running the per-stage playbooks separately opens a new session each time, and
+# a later stage cannot reference earlier UNPUBLISHED objects. (Per-stage runs are
+# fine if you publish each stage, i.e. set cp_publish: true.)
+cp_publish: false
 
 # --- NAT hide-behind target ---------------------------------------------------
 # For Cisco "nat ... dynamic interface" (PAT / hide behind the firewall IP), the

@@ -1,0 +1,42 @@
+---
+# Stage tasks: network object-groups (cp_mgmt_group).
+# Included by 2_object-groups.yml (own session) and by site.yml (shared session).
+# Consumes vars from ../vars/2_object_groups.yml. Does not publish.
+
+# Pass 1: create every group empty first, so groups that nest other groups
+# (group-object) resolve regardless of definition order.
+- name: Ensure groups exist (empty)
+  check_point.mgmt.cp_mgmt_group:
+    name: "{{ item.name }}"
+    comments: "{{ item.comments | default('') }}"
+    color: "{{ cp_default_color }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_network_groups | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: r_groups_create
+  ignore_errors: true
+
+# Pass 2: set membership now that all referenced names exist.
+- name: Populate group membership
+  check_point.mgmt.cp_mgmt_group:
+    name: "{{ item.name }}"
+    members: "{{ item.members }}"
+    comments: "{{ item.comments | default('') }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_network_groups | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.members | length > 0
+  register: r_groups_members
+  ignore_errors: true
+
+- name: Record groups that failed to import
+  ansible.builtin.include_tasks: record_not_imported.yml
+  vars:
+    stage_name: "2_object-groups"
+    task_results:
+      - "{{ r_groups_create }}"
+      - "{{ r_groups_members }}"

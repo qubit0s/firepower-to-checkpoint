@@ -1,10 +1,8 @@
 ---
 # ===========================================================================
-# Playbook: services
-# Creates Check Point TCP/UDP services and service-groups migrated from Cisco
-# `object service` and `object-group service`.
-# Consumes: ../vars/3_services.yml
-# Run:  ansible-playbook playbooks/services.yml
+# Stage 3: services (TCP/UDP/Other) and service-groups (own session).
+# Consumes ../vars/3_services.yml. Publishes only when cp_publish=true.
+# Run:  ./3_apply.sh services   (or ansible-playbook playbooks/3_services.yml)
 # ===========================================================================
 - name: "FTD -> Check Point :: services"
   hosts: checkpoint
@@ -12,90 +10,9 @@
   gather_facts: false
   vars_files:
     - ../vars/3_services.yml
-
   tasks:
-    - name: Create TCP services
-      check_point.mgmt.cp_mgmt_service_tcp:
-        name: "{{ item.name }}"
-        port: "{{ item.port }}"
-        comments: "{{ item.comments | default('') }}"
-        color: "{{ cp_default_color }}"
-        state: present
-        ignore_warnings: true
-      loop: "{{ cp_services_tcp | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: r_tcp
-      ignore_errors: true
-
-    - name: Create UDP services
-      check_point.mgmt.cp_mgmt_service_udp:
-        name: "{{ item.name }}"
-        port: "{{ item.port }}"
-        comments: "{{ item.comments | default('') }}"
-        color: "{{ cp_default_color }}"
-        state: present
-        ignore_warnings: true
-      loop: "{{ cp_services_udp | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: r_udp
-      ignore_errors: true
-
-    # 'Other' services represent bare IP protocols (from object-group protocol),
-    # e.g. GRE=47, ESP=50, OSPF=89. Created before groups that reference them.
-    - name: Create other (IP-protocol) services
-      check_point.mgmt.cp_mgmt_service_other:
-        name: "{{ item.name }}"
-        ip_protocol: "{{ item.ip_protocol }}"
-        comments: "{{ item.comments | default('') }}"
-        color: "{{ cp_default_color }}"
-        state: present
-        ignore_warnings: true
-      loop: "{{ cp_services_other | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: r_other
-      ignore_errors: true
-
-    # Create service-groups empty first, then populate (handles nested groups).
-    - name: Ensure service-groups exist (empty)
-      check_point.mgmt.cp_mgmt_service_group:
-        name: "{{ item.name }}"
-        comments: "{{ item.comments | default('') }}"
-        color: "{{ cp_default_color }}"
-        state: present
-        ignore_warnings: true
-      loop: "{{ cp_service_groups | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: r_sg_create
-      ignore_errors: true
-
-    - name: Populate service-group membership
-      check_point.mgmt.cp_mgmt_service_group:
-        name: "{{ item.name }}"
-        members: "{{ item.members }}"
-        comments: "{{ item.comments | default('') }}"
-        state: present
-        ignore_warnings: true
-      loop: "{{ cp_service_groups | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when: item.members | length > 0
-      register: r_sg_members
-      ignore_errors: true
-
-    - name: Record items that failed to import
-      ansible.builtin.include_tasks: tasks/record_not_imported.yml
-      vars:
-        stage_name: "3_services"
-        task_results:
-          - "{{ r_tcp }}"
-          - "{{ r_udp }}"
-          - "{{ r_other }}"
-          - "{{ r_sg_create }}"
-          - "{{ r_sg_members }}"
+    - name: Import services
+      ansible.builtin.include_tasks: tasks/services.yml
 
     - name: Publish session
       check_point.mgmt.cp_mgmt_publish:

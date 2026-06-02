@@ -1,13 +1,37 @@
 ---
 # ===========================================================================
-# Playbook: site (orchestrator)
-# Runs all five migration stages in dependency order:
+# Playbook: site -- full migration in a SINGLE Check Point session.
+# Runs all five stages in dependency order over one login session:
 #   objects -> object-groups -> services -> policy -> nat
-# Each stage is its own playbook so you can also run them individually.
-# Run:  ansible-playbook playbooks/site.yml
+#
+# Because it is one session, UNPUBLISHED changes from earlier stages are visible
+# to later ones, so this is the playbook to use when leaving changes unpublished
+# for manual review (cp_publish=false, the default). It publishes once at the end
+# only when cp_publish=true.
+# Run:  ./3_apply.sh        (or: ansible-playbook playbooks/site.yml)
 # ===========================================================================
-- import_playbook: 1_objects.yml  # noqa: name[play]
-- import_playbook: 2_object-groups.yml  # noqa: name[play]
-- import_playbook: 3_services.yml  # noqa: name[play]
-- import_playbook: 4_policy.yml  # noqa: name[play]
-- import_playbook: 5_nat.yml  # noqa: name[play]
+- name: "FTD -> Check Point :: full migration (single session)"
+  hosts: checkpoint
+  connection: httpapi
+  gather_facts: false
+  vars_files:
+    - ../vars/1_objects.yml
+    - ../vars/2_object_groups.yml
+    - ../vars/3_services.yml
+    - ../vars/4_policy.yml
+    - ../vars/5_nat.yml
+  tasks:
+    - name: "Stage 1 - network objects"
+      ansible.builtin.include_tasks: tasks/objects.yml
+    - name: "Stage 2 - network object-groups"
+      ansible.builtin.include_tasks: tasks/object-groups.yml
+    - name: "Stage 3 - services"
+      ansible.builtin.include_tasks: tasks/services.yml
+    - name: "Stage 4 - access policy"
+      ansible.builtin.include_tasks: tasks/policy.yml
+    - name: "Stage 5 - NAT rules"
+      ansible.builtin.include_tasks: tasks/nat.yml
+
+    - name: Publish session (only when cp_publish=true)
+      check_point.mgmt.cp_mgmt_publish:
+      when: cp_publish | bool

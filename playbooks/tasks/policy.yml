@@ -1,0 +1,32 @@
+---
+# Stage tasks: access rules (cp_mgmt_access_rule) into cp_access_layer.
+# Included by 4_policy.yml (own session) and by site.yml (shared session).
+# Consumes vars from ../vars/4_policy.yml. Does not publish.
+
+- name: Create access rules (in ACL order)
+  check_point.mgmt.cp_mgmt_access_rule:
+    layer: "{{ cp_access_layer }}"
+    name: "{{ item.name }}"
+    position: "{{ rule_index + 1 }}"
+    action: "{{ item.action }}"
+    source: "{{ item.source }}"
+    destination: "{{ item.destination }}"
+    # Map the placeholder icmp service name to the configured one.
+    service: "{{ item.service | map('replace', 'icmp-proto', cp_icmp_service) | list }}"
+    enabled: "{{ item.enabled | default(true) }}"
+    comments: "{{ item.comments | default('') }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_access_rules | default([]) }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.action }})"
+    index_var: rule_index
+  register: r_rules
+  ignore_errors: true
+
+- name: Record access rules that failed to import
+  ansible.builtin.include_tasks: record_not_imported.yml
+  vars:
+    stage_name: "4_policy"
+    task_results:
+      - "{{ r_rules }}"

@@ -1,0 +1,71 @@
+---
+# Stage tasks: network objects (hosts, networks, address-ranges, dns-domains).
+# Included by 1_objects.yml (own session) and by site.yml (shared session).
+# Consumes vars from ../vars/1_objects.yml. Does not publish.
+
+- name: Create host objects
+  check_point.mgmt.cp_mgmt_host:
+    name: "{{ item.name }}"
+    ip_address: "{{ item.ip_address }}"
+    comments: "{{ item.comments | default('') }}"
+    color: "{{ cp_default_color }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: r_hosts
+  ignore_errors: true
+
+- name: Create network objects
+  check_point.mgmt.cp_mgmt_network:
+    name: "{{ item.name }}"
+    subnet: "{{ item.subnet }}"
+    mask_length: "{{ item.mask_length }}"
+    comments: "{{ item.comments | default('') }}"
+    color: "{{ cp_default_color }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_networks | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: r_networks
+  ignore_errors: true
+
+- name: Create address-range objects
+  check_point.mgmt.cp_mgmt_address_range:
+    name: "{{ item.name }}"
+    ip_address_first: "{{ item.ip_address_first }}"
+    ip_address_last: "{{ item.ip_address_last }}"
+    comments: "{{ item.comments | default('') }}"
+    color: "{{ cp_default_color }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_address_ranges | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: r_ranges
+  ignore_errors: true
+
+- name: Create dns-domain objects (from FQDN network objects)
+  check_point.mgmt.cp_mgmt_dns_domain:
+    name: "{{ item.name }}"
+    is_sub_domain: false
+    comments: "{{ item.comments | default('') }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_dns_domains | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: r_dns
+  ignore_errors: true
+
+- name: Record objects that failed to import
+  ansible.builtin.include_tasks: record_not_imported.yml
+  vars:
+    stage_name: "1_objects"
+    task_results:
+      - "{{ r_hosts }}"
+      - "{{ r_networks }}"
+      - "{{ r_ranges }}"
+      - "{{ r_dns }}"
