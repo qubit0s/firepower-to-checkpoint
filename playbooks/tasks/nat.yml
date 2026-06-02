@@ -7,7 +7,10 @@
   check_point.mgmt.cp_mgmt_nat_rule:
     package: "{{ cp_nat_package }}"
     name: "{{ item.name }}"
-    position: "{{ nat_index + 1 }}"
+    # Append to the bottom of the manual NAT section. Numeric position 1 lands in
+    # Check Point's auto-generated NAT section ("You can't modify auto-generated
+    # section"); inserting at the bottom in loop order preserves the Cisco order.
+    position: bottom
     enabled: "{{ item.enabled | default(true) }}"
     method: "{{ item.method }}"
     # Omit untranslated fields entirely (Check Point treats absent = "Original";
@@ -27,7 +30,6 @@
   loop: "{{ cp_nat_rules | default([]) }}"
   loop_control:
     label: "{{ item.name }} ({{ item.method }})"
-    index_var: nat_index
   register: r_nat
   ignore_errors: true
 
