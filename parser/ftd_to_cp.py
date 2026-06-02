@@ -75,6 +75,18 @@ PROTOCOL_NAMES = {
 }
 
 
+# Flags whose message contains one of these are "auto-handled (FYI)" -- a safe
+# transformation the parser made; everything else is "needs your attention".
+HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP")
+
+_USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def c(code, text):
+    """Wrap text in an ANSI color/style code when output is a TTY."""
+    return f"\033[{code}m{text}\033[0m" if _USE_COLOR else text
+
+
 class _IndentedDumper(yaml.SafeDumper):
     """YAML dumper that indents block sequences under their key, so the output
     passes yamllint's default `indentation: {indent-sequences: true}` rule."""
@@ -926,8 +938,10 @@ class Converter:
                 ("nat_rules", len(nat["cp_nat_rules"])),
                 ("auto_generated_objects (inline literals)", auto),
             ])),
-            ("needs_review_count", len(set(self.unsupported))),
-            ("needs_review", sorted(set(self.unsupported))),
+            ("handled", sorted(m for m in set(self.unsupported)
+                               if any(k in m for k in HANDLED_MARKERS))),
+            ("attention", sorted(m for m in set(self.unsupported)
+                                 if not any(k in m for k in HANDLED_MARKERS))),
         ])
 
     def write_reports(self, reports_dir, stats):
@@ -947,12 +961,21 @@ class Converter:
                   "| Object type | Count |", "|---|---:|"]
         for k, v in stats["converted"].items():
             lines.append(f"| {k} | {v} |")
-        lines += ["", f"## Needs manual review: {stats['needs_review_count']}", ""]
-        if stats["needs_review"]:
-            for item in stats["needs_review"]:
+        lines += ["", f"## ✅ Auto-handled — no action needed ({len(stats['handled'])})",
+                  "", "_Safe transformations the parser made; listed so you're aware._", ""]
+        if stats["handled"]:
+            for item in stats["handled"]:
                 lines.append(f"- {item}")
         else:
-            lines.append("_None — parse was clean._")
+            lines.append("_Nothing._")
+        lines += ["", f"## ⚠️ Needs your attention ({len(stats['attention'])})", ""]
+        if stats["attention"]:
+            lines.append("_Review these — they may not import or may need manual work._")
+            lines.append("")
+            for item in stats["attention"]:
+                lines.append(f"- {item}")
+        else:
+            lines.append("_None — nothing needs manual work._ 🎉")
         lines.append("")
         with open(md, "w") as fh:
             fh.write("\n".join(lines))
@@ -979,27 +1002,38 @@ def main():
     md, js = conv.write_reports(args.reports, stats)
 
     col = 26
-    print("\nPARSE OVERVIEW  (found in config -> converted)")
-    print("=" * 52)
-    print("Found in config:")
+    print("\n" + c("1;36", "PARSE OVERVIEW  (found in config -> converted)"))
+    print(c("36", "=" * 52))
+    print(c("1", "Found in config:"))
     for k, v in stats["source"].items():
         print(f"  {k:<{col}} {v:>6}")
-    print("\nConverted to Check Point:")
+    print("\n" + c("1", "Converted to Check Point:"))
     for k, v in stats["converted"].items():
         print(f"  {k:<{col}} {v:>6}")
-    print(f"\n  {'needs manual review':<{col}} {stats['needs_review_count']:>6}")
 
-    print("\nWrote vars:")
-    for p in written:
+    handled, attention = stats["handled"], stats["attention"]
+    print("\n" + c("32", f"  ✔ auto-handled (FYI) ......... {len(handled):>4}"))
+    att_color = "33" if attention else "32"
+    print(c(att_color, f"  ⚠ needs your attention ...... {len(attention):>4}"))
+
+    print("\n" + c("1", "Wrote:"))
+    for p in written + [md, js]:
         print("  " + p)
-    print(f"\nWrote reports:\n  {md}\n  {js}")
-    if stats["needs_review"]:
-        print(f"\n[!] {stats['needs_review_count']} item(s) need manual review "
-              f"(details in {md}):")
-        for line in stats["needs_review"]:
-            print("    - " + line)
+
+    if handled:
+        print("\n" + c("32", f"✔ Auto-handled (no action needed) — {len(handled)}:"))
+        for line in handled:
+            print(c("32", "    • " + line))
+    if attention:
+        print("\n" + c("1;33", f"⚠ Needs your attention — {len(attention)} "
+                               f"(see {md}):"))
+        for line in attention:
+            print(c("33", "    • " + line))
+        print("\n" + c("1;33", "NEXT: review the items above and reports/parse_summary.md, "
+                               "then run  ./3_apply.sh"))
     else:
-        print("\n[ok] Nothing flagged for review.")
+        print("\n" + c("1;32", "✔ Parse is clean — nothing needs manual work."))
+        print(c("1;32", "NEXT: run  ./3_apply.sh  to push the changes to Check Point."))
 
 
 if __name__ == "__main__":

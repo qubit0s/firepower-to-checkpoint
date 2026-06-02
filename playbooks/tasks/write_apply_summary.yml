@@ -19,6 +19,12 @@
     content: |
       # Apply summary ({{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }})
 
+      {% if apply_tot_failed | int == 0 %}
+      ✅ SUCCESS — all {{ apply_tot_ok }} item(s) were applied with no failures.
+      {% else %}
+      ⚠️ {{ apply_tot_failed }} item(s) FAILED — see the reports/<stage>_not_imported.yml
+      files listed below for the object name and the exact Check Point error.
+      {% endif %}
       published: {{ cp_publish | default(false) }}
 
       | Stage | Action | Processed | OK | Failed |
@@ -30,8 +36,20 @@
 
       Per-stage failure detail (object + reason) is in reports/<stage>_not_imported.yml.
 
-- name: "Summary: print apply totals"
+- name: "Result: ALL APPLIED OK"
   ansible.builtin.debug:
-    msg: >-
-      APPLY TOTAL: processed={{ apply_tot_processed }} ok={{ apply_tot_ok }}
-      failed={{ apply_tot_failed }} -> reports/apply_summary.md
+    msg:
+      - "✅ SUCCESS — {{ apply_tot_ok }} item(s) applied, 0 failed."
+      - "Summary: reports/apply_summary.md"
+      - "{{ 'Changes are PUBLISHED.' if (cp_publish | default(false) | bool)
+            else 'Changes are NOT published — review in SmartConsole > Sessions, then publish.' }}"
+  when: apply_tot_failed | int == 0
+
+- name: "Result: SOME ITEMS FAILED"
+  ansible.builtin.debug:
+    msg:
+      - "⚠ {{ apply_tot_failed }} of {{ apply_tot_processed }} item(s) FAILED."
+      - "What to do: open reports/<stage>_not_imported.yml (e.g. 1_objects, 2_object-groups)"
+      - "  -> each lists the object name and the exact Check Point error."
+      - "Overview: reports/apply_summary.md . Fix the cause, then re-run ./3_apply.sh (idempotent)."
+  when: apply_tot_failed | int > 0

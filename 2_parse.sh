@@ -19,6 +19,6 @@ if [ ! -x ".venv/bin/python" ]; then
   exit 1
 fi
 
+# The parser prints a colored overview + a clear "what's auto-handled vs needs
+# attention" verdict and the next step.
 .venv/bin/python parser/ftd_to_cp.py --config "$CONFIG" --out vars --reports reports
-echo
-echo "Review vars/*.yml and reports/parse_summary.md before applying."

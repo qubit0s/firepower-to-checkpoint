@@ -26,13 +26,14 @@ ansible-galaxy collection install -r requirements.yml -p ./collections
 
 echo "==> 4/4  Finalising"
 chmod +x 2_parse.sh 3_apply.sh 2>/dev/null || true
-echo "    edit inventory/hosts.ini with your connection details (next step)"
 
-cat <<'DONE'
+# Colored completion banner (plain text if not a TTY)
+if [ -t 1 ]; then G="\033[1;32m"; B="\033[1m"; N="\033[0m"; else G=""; B=""; N=""; fi
+printf "\n${G}%s${N}\n" "✔ Setup complete."
 
-Setup complete.
+cat <<DONE
 
-Next steps:
+${B}Next steps:${N}
   a) Edit inventory/hosts.ini   -> mgmt host + ONE auth block:
                                    Smart-1 Cloud (api key + cloud id) or
                                    on-prem (api key, or user/password)
