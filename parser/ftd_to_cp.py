@@ -825,10 +825,8 @@ class Converter:
                 self.unsupported.append(
                     f"interface '{nameif}': no IPv4 address -> no network group created (skipped)")
                 continue
-            # Always suffix '_net' so the interface group can't clash with an existing
-            # object/zone of the same nameif (config objects, or zones left by earlier
-            # runs). These groups aren't referenced elsewhere, so the name is free.
-            gname = cp_name(nameif) + "_net"
+            # Group is named after the nameif (e.g. 'inside', 'outside').
+            gname = cp_name(nameif)
             self.net_groups[gname] = {"members": [self._auto_network(ip, mask)], "comments": note}
             self.iface_groups.add(gname)
 
