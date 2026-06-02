@@ -56,7 +56,7 @@
     ignore_warnings: true
   loop: "{{ cp_dns_domains | default([]) }}"
   loop_control:
-    label: "{{ item.name }}"
+    label: "{{ item.name }} (fqdn {{ item.fqdn }})"
   register: r_dns
   ignore_errors: true
 

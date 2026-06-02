@@ -162,10 +162,17 @@ class Converter:
         self._known_svc = set()
         # named objects that are 0.0.0.0/0 -> resolve references to predefined "Any"
         self.any_aliases = set()
+        # FQDN objects: Cisco object name -> Check Point dns-domain name (".<fqdn>")
+        self.fqdn_aliases = {}
 
     def _ref(self, name):
-        """Resolve a network-object reference, mapping 0.0.0.0/0 aliases to 'Any'."""
-        return "Any" if name in self.any_aliases else name
+        """Resolve a network-object reference: 0.0.0.0/0 -> 'Any', FQDN object -> its
+        dns-domain name (which must start with '.'), else the name unchanged."""
+        if name in self.any_aliases:
+            return "Any"
+        if name in self.fqdn_aliases:
+            return self.fqdn_aliases[name]
+        return name
 
     # ---- auto-object helpers (for inline literals) -------------------------
     def _auto_host(self, ip):
@@ -265,10 +272,21 @@ class Converter:
                     _, first, last = t.split()[:3]
                     self.ranges[name] = {"first": first, "last": last, "comments": comments}
                 elif t.startswith("fqdn"):
-                    # 'fqdn [v4|v6|dynamic] name.example.com'
+                    # 'fqdn [v4|v6|dynamic] <domain> [id <n>]'  (FDM appends 'id <n>')
                     parts = t.split()
-                    fqdn = parts[-1]
-                    self.fqdns[name] = {"fqdn": fqdn, "comments": comments}
+                    i = 2 if len(parts) > 1 and parts[1] in ("v4", "v6", "dynamic") else 1
+                    fqdn = parts[i] if len(parts) > i else ""
+                    if "id" in parts:                       # drop trailing 'id <n>'
+                        j = parts.index("id")
+                        if i >= j:
+                            fqdn = ""
+                    if fqdn and not re.fullmatch(r"\d+", fqdn):
+                        domain = fqdn if fqdn.startswith(".") else "." + fqdn
+                        self.fqdns[name] = {"fqdn": fqdn, "comments": comments}
+                        self.fqdn_aliases[name] = domain    # references -> dns-domain name
+                    else:
+                        self.unsupported.append(
+                            f"object network: could not extract FQDN from '{t}'")
 
     # ======================================================================
     # 2. SERVICE OBJECTS  -> services.yml
@@ -622,9 +640,7 @@ class Converter:
             "cp_address_ranges": [dict(name=n, ip_address_first=v["first"],
                                        ip_address_last=v["last"], comments=v["comments"])
                                   for n, v in self.ranges.items()],
-            "cp_dns_domains": [dict(name=("." + v["fqdn"] if not v["fqdn"].startswith(".") else v["fqdn"]),
-                                    fqdn=v["fqdn"], comments=v["comments"])
-                               for n, v in self.fqdns.items()],
+            "cp_dns_domains": self._dns_domain_list(),
         }
         groups = {"cp_network_groups": [dict(name=n, members=dedup(v["members"]),
                                              comments=v["comments"])
@@ -647,6 +663,18 @@ class Converter:
             self._dump(out_dir, "5_nat.yml", nat),
         ]
         return written, objects, groups, services, policy, nat
+
+    def _dns_domain_list(self):
+        """Build cp_dns_domains, de-duplicated by domain name (many FTD FQDN
+        objects can resolve to the same domain)."""
+        seen, out = set(), []
+        for v in self.fqdns.values():
+            dn = v["fqdn"] if v["fqdn"].startswith(".") else "." + v["fqdn"]
+            if dn in seen:
+                continue
+            seen.add(dn)
+            out.append(dict(name=dn, fqdn=v["fqdn"], comments=v["comments"]))
+        return out
 
     # ---- reporting ---------------------------------------------------------
     def source_counts(self):

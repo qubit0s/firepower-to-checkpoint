@@ -22,6 +22,10 @@ object network RANGE_dhcp
  range 10.10.30.50 10.10.30.99
 object network FQDN_updates
  fqdn dynamic updates.vendor.example.com
+object network dc1.ext.fqdn.duo.com
+ fqdn v4 duo.com id 268435496
+object network dc1.ext.fqdn.office.com1
+ fqdn v4 outlook.office.com id 268435498
 object network HOST_web01_public
  host 203.0.113.11
 object network NAT_pool_outside
