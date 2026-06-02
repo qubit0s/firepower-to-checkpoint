@@ -11,8 +11,11 @@
 # encrypted group_vars/all.vault.yml.)
 
 # --- Target policy / package --------------------------------------------------
-# Access-control layer that migrated access rules are written into.
-cp_access_layer: "Network"
+# Access policy: each converted Cisco ACL becomes its OWN policy package (named
+# after the ACL); rules go into that package's "<package> Network" layer. Choose
+# which ACLs to convert at parse time:  ./2_parse.sh <config> --acls NAME1,NAME2
+# (default: the ACL bound 'access-group <name> global').
+#
 # Policy package that migrated NAT rules are written into.
 cp_nat_package: "Standard"
 

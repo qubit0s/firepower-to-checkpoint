@@ -77,7 +77,8 @@ PROTOCOL_NAMES = {
 
 # Flags whose message contains one of these are "auto-handled (FYI)" -- a safe
 # transformation the parser made; everything else is "needs your attention".
-HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP")
+HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP",
+                   "reusing Check Point predefined", "not selected for conversion")
 
 _USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -102,6 +103,26 @@ def warn(msg):
 # Check Point predefined/reserved object names (case-insensitive) that a migrated
 # object/group must not reuse, or the API errors "more than one object named X".
 RESERVED_NAMES = {"any", "all", "none", "internet", "all_internet"}
+
+# Check Point predefined service names (lowercased). Migrated services/groups with
+# these names are NOT created -- references resolve to the built-in (user chose
+# "reuse the built-in"). Extend as collisions are found.
+PREDEFINED_SERVICES = {
+    "ftp", "ftp_bidir", "ftp-port", "ftp-pasv", "http", "https", "ssh", "telnet",
+    "smtp", "pop-3", "pop3", "imap", "nntp", "ntp", "ntp-udp", "snmp", "snmp-trap",
+    "ldap", "ldap-udp", "ldap-ssl", "rdp", "kerberos", "kerberos_v5_tcp", "radius",
+    "radius-acct", "tacacs", "sip", "sip_any", "h323", "rtsp", "dns", "domain-tcp",
+    "domain-udp", "dns_tcp", "dns_udp", "tftp", "syslog", "echo-request", "icmp-proto",
+    "netbios-ns", "netbios-dgm", "netbios-ssn", "nbname", "nbdatagram", "nbsession",
+    "microsoft-ds", "ms-sql-s", "ms-sql-m", "gre", "esp", "ah", "ospf", "bgp", "rip",
+    "pim", "igmp", "vrrp", "sqlnet1", "sqlnet2", "ica", "finger", "gopher", "whois",
+    "lpd", "ident", "daytime", "discard", "irc", "uucp", "ica-browsing",
+}
+
+
+def is_predef_service(name):
+    """True if name collides with a Check Point predefined service (reuse built-in)."""
+    return name.lower() in PREDEFINED_SERVICES
 
 
 def cp_name(raw):
@@ -166,7 +187,9 @@ class Converter:
         self.svc_udp = OrderedDict()      # name -> {port, comments}
         self.svc_other = OrderedDict()    # name -> {ip_protocol, comments}
         self.svc_groups = OrderedDict()   # name -> {members:[], comments}
-        self.zones = OrderedDict()        # name -> {comments}  (from interface nameif)
+        self.packages = OrderedDict()     # package name -> {comments}  (one per converted ACL)
+        self.selected_acls = None         # None -> default (global ACL); else list of ACL names
+        self.global_acl = None            # ACL bound by 'access-group <name> global'
         self.rules = []                   # list of dicts
         self.nat_rules = []               # list of dicts
         self.unsupported = []             # list of strings
@@ -568,68 +591,126 @@ class Converter:
             return [cp_name(tokens[1])], tokens[2:]
         return None, tokens
 
+    def _consume_ifc(self, tokens):
+        """Consume a leading 'ifc <zone>' interface qualifier -> (zone_name|None, rest)."""
+        if len(tokens) >= 2 and tokens[0] == "ifc":
+            return cp_name(tokens[1]), tokens[2:]
+        return None, tokens
+
     def parse_access_lists(self):
-        # map access-list name -> interface/direction from access-group lines
+        # bindings + which ACL is bound globally
         binding = {}
+        self.global_acl = None
         for ag in self.parse.find_objects(r"^access-group "):
             parts = ag.text.split()
-            # access-group NAME in|out interface IF   OR   access-group NAME global
-            if len(parts) >= 2:
-                aclname = parts[1]
-                binding[aclname] = " ".join(parts[2:])
+            if len(parts) >= 3 and parts[2] == "global":
+                self.global_acl = parts[1]
+                binding[parts[1]] = "global"
+            elif len(parts) >= 2:
+                binding[parts[1]] = " ".join(parts[2:])
+
+        ace_re = r"^access-list \S+ (?:extended|advanced) "
+        all_acls = []
+        for a in self.parse.find_objects(ace_re):
+            nm = a.text.split()[1]
+            if nm not in all_acls:
+                all_acls.append(nm)
+
+        # selection: explicit list -> else the global ACL -> else everything
+        if self.selected_acls:
+            targets = [a for a in self.selected_acls if a in all_acls]
+            for m in (set(self.selected_acls) - set(all_acls)):
+                self.unsupported.append(f"selected ACL '{m}' not found in config; skipped")
+        elif self.global_acl:
+            targets = [self.global_acl]
+        else:
+            targets = list(all_acls)
+        for a in all_acls:
+            if a not in targets:
+                self.unsupported.append(
+                    f"ACL '{a}' not selected for conversion (skipped); pass --acls to include it")
+
+        # remark text per rule-id (FTD: 'remark rule-id N: <ACCESS/L7 RULE>: name')
+        remarks = {}
+        for r in self.parse.find_objects(r"^access-list \S+ remark "):
+            m = re.search(r"rule-id (\d+):\s*(.*)$", r.text)
+            if m:
+                remarks[m.group(1)] = m.group(2).strip()
 
         counters = {}
-        for acl in self.parse.find_objects(r"^access-list \S+ extended "):
+        for acl in self.parse.find_objects(ace_re):
             toks = acl.text.split()
-            # access-list NAME extended ACTION PROTO ...
             aclname = toks[1]
+            if aclname not in targets:
+                continue
             action_word = toks[3]
             proto = toks[4]
             rest = toks[5:]
             inactive = "inactive" in toks
+            rule_id = toks[toks.index("rule-id") + 1] if "rule-id" in toks else None
 
-            # protocol given as a service object/group:  '... permit object SVC src dst'
+            # protocol given as a service object/group:  'permit object-group SVC ...'
             svc_from_proto = None
             if proto in ("object", "object-group") and rest:
                 svc_from_proto = [cp_name(rest[0])]
                 rest = rest[1:]
 
+            szone, rest = self._consume_ifc(rest)        # source 'ifc <zone>'
             src, rest = self._resolve_addr_tokens(rest)
-            src_ports, rest = self._consume_ports(proto, rest)   # optional source port
-            if src_ports:
+            sp, rest = self._consume_ports(proto, rest)  # optional source port
+            if sp:
                 self.unsupported.append(
-                    f"acl {aclname}: source-port match ({src_ports}) not represented in the "
-                    f"Check Point service (service matches destination port); review")
+                    f"acl {aclname}: source-port match not represented in CP service; review")
+            dzone, rest = self._consume_ifc(rest)        # destination 'ifc <zone>'
             dst, rest = self._resolve_addr_tokens(rest)
-            svc, rest = self._consume_ports(proto, rest)         # optional destination port
+            svc, rest = self._consume_ports(proto, rest)  # optional destination port
 
             if svc_from_proto is not None:
                 svc = svc_from_proto
-            elif svc is None:                                    # no explicit port -> protocol level
+            elif svc is None:
                 if proto in ("icmp", "icmp6"):
-                    svc = ["icmp-proto"]                         # remapped to cp_icmp_service in play
+                    svc = ["icmp-proto"]
                 elif proto in ("ip", "tcp", "udp"):
                     svc = ["Any"]
                 else:
                     svc = ["Any"]
-                    self.unsupported.append(
-                        f"acl {aclname}: protocol '{proto}' mapped to Any service; review")
-            if "time-range" in toks:
-                self.unsupported.append(
-                    f"acl {aclname}: time-range not migrated (Check Point uses time objects); review")
+                    self.unsupported.append(f"acl {aclname}: protocol '{proto}' -> Any; review")
 
+            # interface (ifc) qualifiers are NOT wired into the rule (no zones in
+            # the rulebase); they're recorded in the comment for reference.
+            source = dedup(src)
+            destination = dedup(dst)
+            ifc_note = ""
+            if szone or dzone:
+                ifc_note = f" [ifc {szone or 'any'} -> {dzone or 'any'}]"
+
+            if any(t in ("object", "object-group", "ifc") for t in rest):
+                self.unsupported.append(
+                    f"acl {aclname} rule-id {rule_id}: unparsed tokens '{' '.join(rest)}'; review")
+            if "time-range" in toks:
+                self.unsupported.append(f"acl {aclname}: time-range not migrated; review")
+
+            package = cp_name(aclname)
+            self.packages[package] = {"comments": f"from Cisco ACL {aclname} "
+                                                  f"({binding.get(aclname, 'unbound')})"}
             counters[aclname] = counters.get(aclname, 0) + 1
-            note = f"migrated from access-list {aclname} ({binding.get(aclname, 'unbound')})"
+            note = f"from {aclname}"
+            if rule_id:
+                note += f" rule-id {rule_id}"
+                if rule_id in remarks:
+                    note += f" [{remarks[rule_id]}]"
+            note += ifc_note
             if inactive:
-                note += " [was inactive]"
+                note += " [inactive]"
             self.rules.append({
                 "acl": aclname,
-                "name": f"{aclname}-{counters[aclname]}",
+                "package": package,
+                "layer": f"{package} Network",
+                "name": f"{package}-{counters[aclname]}",
                 "action": "Accept" if action_word == "permit" else "Drop",
-                "source": src,
-                "destination": dst,
+                "source": source,
+                "destination": destination,
                 "service": svc,
-                "binding": binding.get(aclname, ""),
                 "enabled": not inactive,
                 "comments": note,
             })
@@ -704,26 +785,39 @@ class Converter:
 
     # ======================================================================
     # ======================================================================
-    # 7. INTERFACES -> security zones
+    # 7. INTERFACES -> network groups (named after nameif)
     # ======================================================================
     def parse_interfaces(self):
-        """Each Cisco interface 'nameif' becomes a Check Point security zone.
-        Zones are created but NOT auto-wired into rules; each rule records its
-        access-group interface binding in its comment for manual zoning."""
+        """Each Cisco interface 'nameif' becomes a Check Point network GROUP named
+        after the nameif, containing the interface's directly-connected network
+        (from 'ip address'). Created for grouping/reference; NOT wired into rules
+        (most deployments don't use the interface dimension in the rulebase)."""
         for obj in self.parse.find_objects(r"^interface "):
-            nameif = seclevel = None
+            nameif = seclevel = ip = mask = None
             for c in obj.children:
                 ct = c.text.strip()
                 if ct.startswith("nameif "):
                     nameif = ct.split("nameif ", 1)[1].strip()
                 elif ct.startswith("security-level "):
                     seclevel = ct.split("security-level ", 1)[1].strip()
-            if nameif:
-                hw = obj.text.split("interface ", 1)[1].strip()
-                note = f"from Cisco interface {hw} (nameif {nameif})"
-                if seclevel is not None:
-                    note += f", security-level {seclevel}"
-                self.zones[cp_name(nameif)] = {"comments": note}
+                elif ct.startswith("ip address "):
+                    p = ct.split()
+                    if len(p) >= 4 and re.match(r"\d+\.\d+\.\d+\.\d+", p[2]):
+                        ip, mask = p[2], p[3]
+            if not nameif:
+                continue
+            hw = obj.text.split("interface ", 1)[1].strip()
+            note = f"from Cisco interface {hw} (nameif {nameif})"
+            if seclevel is not None:
+                note += f", security-level {seclevel}"
+            members = []
+            if ip and mask:
+                members.append(self._auto_network(ip, mask))   # connected subnet
+            else:
+                self.unsupported.append(
+                    f"interface group {cp_name(nameif)}: no IPv4 address on interface; "
+                    f"created empty -- add member networks for this zone manually")
+            self.net_groups[cp_name(nameif)] = {"members": members, "comments": note}
 
     def _resolve_any_groups(self):
         """Check Point's predefined 'Any' cannot be a group member. A group that
@@ -783,7 +877,7 @@ class Converter:
         reference undefined in the config). Dangling group MEMBERS are dropped so
         the group still imports; dangling rule/NAT references are flagged only."""
         known = (set(self.hosts) | set(self.networks) | set(self.ranges)
-                 | set(self.zones) | set(self.svc_tcp) | set(self.svc_udp)
+                 | set(self.svc_tcp) | set(self.svc_udp)
                  | set(self.svc_other) | set(self.net_groups) | set(self.svc_groups))
         known |= {(v["fqdn"] if v["fqdn"].startswith(".") else "." + v["fqdn"])
                   for v in self.fqdns.values()}
@@ -793,7 +887,7 @@ class Converter:
         for n, v in self.net_groups.items():
             kept = []
             for m in v["members"]:
-                if m in valid:
+                if m in valid or is_predef_service(m):
                     kept.append(m)
                 else:
                     self.unsupported.append(
@@ -803,7 +897,7 @@ class Converter:
         for n, v in self.svc_groups.items():
             kept = []
             for m in v["members"]:
-                if m in valid:
+                if m in valid or is_predef_service(m):
                     kept.append(m)
                 else:
                     self.unsupported.append(
@@ -812,7 +906,7 @@ class Converter:
         for r in self.rules:
             for fld in ("source", "destination", "service"):
                 for x in r[fld]:
-                    if x not in valid:
+                    if x not in valid and not is_predef_service(x):
                         self.unsupported.append(
                             f"access rule {r['name']}: undefined object '{x}' in {fld} "
                             f"(rule will fail to import until it exists)")
@@ -820,7 +914,7 @@ class Converter:
             for k in ("original_source", "original_destination", "original_service",
                       "translated_source", "translated_destination", "translated_service"):
                 x = r.get(k)
-                if x and x not in valid:
+                if x and x not in valid and not is_predef_service(x):
                     self.unsupported.append(
                         f"nat rule {r['name']}: undefined object '{x}' in {k}")
 
@@ -856,20 +950,31 @@ class Converter:
                                        ip_address_last=v["last"], comments=v["comments"])
                                   for n, v in self.ranges.items()],
             "cp_dns_domains": self._dns_domain_list(),
-            "cp_security_zones": [dict(name=n, comments=v["comments"])
-                                  for n, v in self.zones.items()],
         }
         groups = {"cp_network_groups": [dict(name=n, members=dedup(v["members"]),
                                              comments=v["comments"])
                                         for n, v in self.net_groups.items()]}
+        # Services/groups named like a Check Point predefined are NOT created
+        # (references resolve to the built-in). Flag each as auto-handled.
+        for n in set(list(self.svc_tcp) + list(self.svc_udp)
+                     + list(self.svc_other) + list(self.svc_groups)):
+            if is_predef_service(n):
+                self.unsupported.append(
+                    f"service '{n}': reusing Check Point predefined (not created)")
         services = {
-            "cp_services_tcp": [dict(name=n, **v) for n, v in self.svc_tcp.items()],
-            "cp_services_udp": [dict(name=n, **v) for n, v in self.svc_udp.items()],
-            "cp_services_other": [dict(name=n, **v) for n, v in self.svc_other.items()],
+            "cp_services_tcp": [dict(name=n, **v) for n, v in self.svc_tcp.items()
+                                if not is_predef_service(n)],
+            "cp_services_udp": [dict(name=n, **v) for n, v in self.svc_udp.items()
+                                if not is_predef_service(n)],
+            "cp_services_other": [dict(name=n, **v) for n, v in self.svc_other.items()
+                                  if not is_predef_service(n)],
             "cp_service_groups": [dict(name=n, members=dedup(v["members"]), comments=v["comments"])
-                                  for n, v in self.svc_groups.items()],
+                                  for n, v in self.svc_groups.items() if not is_predef_service(n)],
         }
-        policy = {"cp_access_rules": self.rules}
+        policy = {
+            "cp_packages": [dict(name=n, comments=v["comments"]) for n, v in self.packages.items()],
+            "cp_access_rules": self.rules,
+        }
         nat = {"cp_nat_rules": self.nat_rules}
 
         written = [
@@ -907,7 +1012,7 @@ class Converter:
             ("object-group network", len(p.find_objects(r"^object-group network "))),
             ("object-group service", len(p.find_objects(r"^object-group service "))),
             ("object-group protocol", len(p.find_objects(r"^object-group protocol "))),
-            ("access-list (ACEs)", len(p.find_objects(r"^access-list \S+ extended "))),
+            ("access-list (ACEs)", len(p.find_objects(r"^access-list \S+ (?:extended|advanced) "))),
             ("object NAT", obj_nat),
             ("manual NAT", len(p.find_objects(r"^nat \("))),
         ])
@@ -923,7 +1028,6 @@ class Converter:
         return OrderedDict([
             ("source", self.source_counts()),
             ("converted", OrderedDict([
-                ("security_zones", len(objects["cp_security_zones"])),
                 ("hosts", len(objects["cp_hosts"])),
                 ("networks", len(objects["cp_networks"])),
                 ("address_ranges", len(objects["cp_address_ranges"])),
@@ -934,6 +1038,7 @@ class Converter:
                 ("udp_services", len(services["cp_services_udp"])),
                 ("other_services", len(services["cp_services_other"])),
                 ("service_groups", len(services["cp_service_groups"])),
+                ("policy_packages", len(policy["cp_packages"])),
                 ("access_rules", len(policy["cp_access_rules"])),
                 ("nat_rules", len(nat["cp_nat_rules"])),
                 ("auto_generated_objects (inline literals)", auto),
@@ -990,12 +1095,17 @@ def main():
     ap.add_argument("--out", default="../vars", help="Output directory for *.yml vars files")
     ap.add_argument("--reports", default="reports",
                     help="Directory for parse_summary.md / parse_report.json")
+    ap.add_argument("--acls", default="",
+                    help="Comma-separated Cisco ACL names to convert (each -> its own "
+                         "policy package). Default: the ACL bound 'access-group <name> global'.")
     args = ap.parse_args()
 
     if not os.path.isfile(args.config):
         sys.exit(f"Config file not found: {args.config}")
 
     conv = Converter(args.config)
+    if args.acls.strip():
+        conv.selected_acls = [a.strip() for a in args.acls.split(",") if a.strip()]
     conv.run()
     written, objects, groups, services, policy, nat = conv.emit(args.out)
     stats = conv.build_stats(objects, groups, services, policy, nat)

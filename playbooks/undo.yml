@@ -266,20 +266,6 @@
           register: r_u_hosts
           ignore_errors: true
 
-        - name: Delete security zones
-          check_point.mgmt.cp_mgmt_security_zone:
-            name: "{{ item.name }}"
-            state: absent
-            ignore_warnings: true
-          loop: "{{ cp_security_zones | default([]) }}"
-          loop_control:
-            label: "{{ item.name }}"
-          when:
-            - (select_names | length == 0) or (item.name in select_names)
-            - item.name not in skip_names
-          register: r_u_zones
-          ignore_errors: true
-
         - name: Record objects that failed to delete
           ansible.builtin.include_tasks: tasks/record_not_imported.yml
           vars:
@@ -290,7 +276,6 @@
               - "{{ r_u_ranges }}"
               - "{{ r_u_networks }}"
               - "{{ r_u_hosts }}"
-              - "{{ r_u_zones }}"
 
         - name: Publish object/zone deletions (when cp_publish=true)
           check_point.mgmt.cp_mgmt_publish:

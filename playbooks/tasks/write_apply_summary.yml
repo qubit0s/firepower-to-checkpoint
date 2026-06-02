@@ -8,6 +8,7 @@
   ansible.builtin.set_fact:
     apply_tot_processed: "{{ apply_stats | default([]) | map(attribute='processed') | sum }}"
     apply_tot_ok: "{{ apply_stats | default([]) | map(attribute='ok') | sum }}"
+    apply_tot_benign: "{{ apply_stats | default([]) | map(attribute='benign') | sum }}"
     apply_tot_failed: "{{ apply_stats | default([]) | map(attribute='failed') | sum }}"
 
 - name: "Summary: write apply_summary.md"
@@ -20,26 +21,29 @@
       # Apply summary ({{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }})
 
       {% if apply_tot_failed | int == 0 %}
-      ✅ SUCCESS — all {{ apply_tot_ok }} item(s) were applied with no failures.
+      ✅ SUCCESS — {{ apply_tot_ok }} applied, {{ apply_tot_benign }} already existed/built-in (OK), 0 real failures.
       {% else %}
       ⚠️ {{ apply_tot_failed }} item(s) FAILED — see the reports/<stage>_not_imported.yml
-      files listed below for the object name and the exact Check Point error.
+      files for the object name and the exact Check Point error.
       {% endif %}
       published: {{ cp_publish | default(false) }}
 
-      | Stage | Action | Processed | OK | Failed |
-      |---|---|---:|---:|---:|
+      | Stage | Action | Processed | OK | Exists/Built-in | Failed |
+      |---|---|---:|---:|---:|---:|
       {% for s in apply_stats | default([]) %}
-      | {{ s.stage }} | {{ s.action }} | {{ s.processed }} | {{ s.ok }} | {{ s.failed }} |
+      | {{ s.stage }} | {{ s.action }} | {{ s.processed }} | {{ s.ok }} | {{ s.benign }} | {{ s.failed }} |
       {% endfor %}
-      | **total** |  | **{{ apply_tot_processed }}** | **{{ apply_tot_ok }}** | **{{ apply_tot_failed }}** |
+      | **total** |  | **{{ apply_tot_processed }}** | **{{ apply_tot_ok }}** | **{{ apply_tot_benign }}** | **{{ apply_tot_failed }}** |
 
-      Per-stage failure detail (object + reason) is in reports/<stage>_not_imported.yml.
+      "Exists/Built-in" = benign (duplicate/read-only/predefined) — no action needed.
+      Real failures (object + reason) are in reports/<stage>_not_imported.yml.
 
-- name: "Result: ALL APPLIED OK"
+- name: "Result: SUCCESS (no real failures)"
   ansible.builtin.debug:
     msg:
-      - "✅ SUCCESS — {{ apply_tot_ok }} item(s) applied, 0 failed."
+      - "✅ SUCCESS — {{ apply_tot_ok }} applied, 0 real failures."
+      - "{{ 'ℹ ' ~ apply_tot_benign ~ ' item(s) already existed / are built-ins (OK, skipped).'
+            if apply_tot_benign | int > 0 else '' }}"
       - "Summary: reports/apply_summary.md"
       - "{{ 'Changes are PUBLISHED.' if (cp_publish | default(false) | bool)
             else 'Changes are NOT published — review in SmartConsole > Sessions, then publish.' }}"
@@ -48,8 +52,9 @@
 - name: "Result: SOME ITEMS FAILED"
   ansible.builtin.debug:
     msg:
-      - "⚠ {{ apply_tot_failed }} of {{ apply_tot_processed }} item(s) FAILED."
-      - "What to do: open reports/<stage>_not_imported.yml (e.g. 1_objects, 2_object-groups)"
-      - "  -> each lists the object name and the exact Check Point error."
+      - "⚠ {{ apply_tot_failed }} real failure(s) of {{ apply_tot_processed }} processed."
+      - "{{ 'ℹ ' ~ apply_tot_benign ~ ' already existed/built-in (OK, ignored).'
+            if apply_tot_benign | int > 0 else '' }}"
+      - "What to do: open reports/<stage>_not_imported.yml -> object name + exact error."
       - "Overview: reports/apply_summary.md . Fix the cause, then re-run ./3_apply.sh (idempotent)."
   when: apply_tot_failed | int > 0

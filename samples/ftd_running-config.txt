@@ -100,6 +100,13 @@ object-group protocol GRP_vpn_proto
 ! ---------------------------------------------------------------------
 ! Access-lists  (access-list ... extended ...)
 ! ---------------------------------------------------------------------
+object-group service RDP tcp
+ port-object eq 3389
+access-list CSM_FW_ACL_ remark rule-id 268441883: ACCESS POLICY: DC1-FTD-ACP - Mandatory
+access-list CSM_FW_ACL_ remark rule-id 268441883: L7 RULE: inbound-web-policy
+access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object HOST_web01 object-group GRP_web_ports rule-id 268441883
+access-list CSM_FW_ACL_ advanced permit ip ifc inside any ifc outside any rule-id 268441884
+access-group CSM_FW_ACL_ global
 access-list ACL_inside_in extended permit tcp object-group GRP_internal_nets object HOST_web01 object-group GRP_web_ports
 access-list ACL_inside_in extended permit udp object NET_internal any object-group GRP_dns_ports
 access-list ACL_inside_in extended deny ip any any

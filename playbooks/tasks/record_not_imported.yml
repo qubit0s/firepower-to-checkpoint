@@ -13,14 +13,18 @@
 # Output: reports/<stage_name>_not_imported.yml  (always written, even if empty).
 # ===========================================================================
 
-- name: "Report: reset failure accumulator"
+# Errors matching this regex are BENIGN: the object is effectively already there
+# (a Check Point built-in, a duplicate, or read-only). They don't impact the import,
+# so they're reported as warnings -- NOT failures.
+- name: "Report: reset accumulators"
   ansible.builtin.set_fact:
-    not_imported: []
+    failed_all: []
+    benign_regex: "more than one object|read-only|already exists|exists\\."
 
 - name: "Report: collect failed items"
   ansible.builtin.set_fact:
-    not_imported: >-
-      {{ not_imported + [ {
+    failed_all: >-
+      {{ failed_all + [ {
            'object': (rec.item.name | default(rec.invocation.module_args.name) | default('?')),
            'error':  (rec.msg | default(rec.exception) | default('failed')) | trim
          } ] }}
@@ -31,8 +35,10 @@
     loop_var: rec
     label: "{{ rec.item.name | default('?') }}"
 
-- name: "Report: compute counts"
+- name: "Report: split benign warnings from real failures"
   ansible.builtin.set_fact:
+    not_imported: "{{ failed_all | rejectattr('error', 'search', benign_regex) | list }}"
+    warnings: "{{ failed_all | selectattr('error', 'search', benign_regex) | list }}"
     stage_attempted: >-
       {{ task_results | selectattr('results', 'defined') | map(attribute='results')
          | flatten | rejectattr('skipped', 'defined') | list | length }}
@@ -43,9 +49,11 @@
       stage: "{{ stage_name }}"
       action: "{{ report_action | default('import') }}"
       processed: "{{ stage_attempted | int }}"
-      ok: "{{ (stage_attempted | int) - (not_imported | length) }}"
+      ok: "{{ (stage_attempted | int) - (not_imported | length) - (warnings | length) }}"
+      already_ok_count: "{{ warnings | length }}"
       failed_count: "{{ not_imported | length }}"
       not_imported: "{{ not_imported }}"
+      warnings_ok: "{{ warnings }}"
 
 - name: "Report: accumulate stage stats"
   ansible.builtin.set_fact:
@@ -54,7 +62,8 @@
            'stage': stage_name,
            'action': report_action | default('import'),
            'processed': stage_attempted | int,
-           'ok': (stage_attempted | int) - (not_imported | length),
+           'ok': (stage_attempted | int) - (not_imported | length) - (warnings | length),
+           'benign': warnings | length,
            'failed': not_imported | length}] }}
 
 - name: "Report: ensure reports directory exists"
@@ -72,15 +81,24 @@
     mode: "0644"
     dest: "{{ playbook_dir }}/../reports/{{ stage_name }}_not_imported.yml"
     content: |
-      # AUTO-GENERATED. Items that FAILED to {{ report_action | default('import') }} on
-      # Check Point during stage '{{ stage_name }}', with the reason. Empty = all OK.
+      # AUTO-GENERATED for stage '{{ stage_name }}' ({{ report_action | default('import') }}).
+      # failed_count = REAL failures (need action). already_ok_count / warnings_ok =
+      # benign (built-in/duplicate/read-only) -- safe, no action needed.
       # Generated {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
       {{ report_payload | to_nice_yaml(indent=2) }}
+
+- name: "Report: benign items (already exist / built-in) for {{ stage_name }}"
+  ansible.builtin.debug:
+    msg: >-
+      ℹ {{ stage_name }}: {{ warnings | length }} item(s) already existed / are built-ins
+      (read-only or duplicate) — OK, skipped, no action needed.
+  when: warnings | length > 0
 
 - name: "Report: stage summary for {{ stage_name }}"
   ansible.builtin.debug:
     msg: >-
       {{ stage_name }}: processed={{ stage_attempted | int }}
-      ok={{ (stage_attempted | int) - (not_imported | length) }}
+      ok={{ (stage_attempted | int) - (not_imported | length) - (warnings | length) }}
+      already-exist={{ warnings | length }}
       failed={{ not_imported | length }}
       {{ '-> reports/' ~ stage_name ~ '_not_imported.yml' if not_imported | length > 0 else '' }}

@@ -1,11 +1,26 @@
 ---
-# Stage tasks: access rules (cp_mgmt_access_rule) into cp_access_layer.
-# Included by 4_policy.yml (own session) and by site.yml (shared session).
-# Consumes vars from ../vars/4_policy.yml. Does not publish.
+# Stage tasks: access policy. Each converted Cisco ACL becomes its own Check
+# Point policy package (access: true auto-creates the "<package> Network" layer);
+# rules go into their package's layer. Consumes ../vars/4_policy.yml. Does not publish.
 
-- name: Create access rules (in ACL order)
+- name: Create policy packages (one per Cisco ACL)
+  check_point.mgmt.cp_mgmt_package:
+    name: "{{ item.name }}"
+    access: true
+    threat_prevention: false
+    comments: "{{ item.comments | default('') }}"
+    color: "{{ cp_default_color }}"
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_packages | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: r_packages
+  ignore_errors: true
+
+- name: Create access rules (in ACL order, into each package's layer)
   check_point.mgmt.cp_mgmt_access_rule:
-    layer: "{{ cp_access_layer }}"
+    layer: "{{ item.layer }}"
     name: "{{ item.name }}"
     position: "{{ rule_index + 1 }}"
     action: "{{ item.action }}"
@@ -29,6 +44,7 @@
   vars:
     stage_name: "4_policy"
     task_results:
+      - "{{ r_packages }}"
       - "{{ r_rules }}"
 
 - name: "Publish session after this stage (when cp_publish=true)"

@@ -2,19 +2,7 @@
 # Stage tasks: network objects (hosts, networks, address-ranges, dns-domains).
 # Included by 1_objects.yml (own session) and by site.yml (shared session).
 # Consumes vars from ../vars/1_objects.yml. Does not publish.
-
-- name: Create security zones (from Cisco interface nameif)
-  check_point.mgmt.cp_mgmt_security_zone:
-    name: "{{ item.name }}"
-    comments: "{{ item.comments | default('') }}"
-    color: "{{ cp_default_color }}"
-    state: present
-    ignore_warnings: true
-  loop: "{{ cp_security_zones | default([]) }}"
-  loop_control:
-    label: "{{ item.name }}"
-  register: r_zones
-  ignore_errors: true
+# (Interfaces are converted to network groups, created in the object-groups stage.)
 
 - name: Create host objects
   check_point.mgmt.cp_mgmt_host:
@@ -78,7 +66,6 @@
   vars:
     stage_name: "1_objects"
     task_results:
-      - "{{ r_zones }}"
       - "{{ r_hosts }}"
       - "{{ r_networks }}"
       - "{{ r_ranges }}"

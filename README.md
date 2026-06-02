@@ -176,16 +176,16 @@ parser or mapping fixes.
 
 | Cisco FTD (ASA syntax) | Check Point module | Notes |
 |---|---|---|
-| `interface … nameif` | `cp_mgmt_security_zone` | one zone per nameif; created, **not** auto-wired into rules (binding kept in rule comment) |
+| `interface … nameif` | `cp_mgmt_group` | one network group per nameif, holding its connected subnet; for grouping/reference, **not** wired into rules |
 | `object network … host` | `cp_mgmt_host` | IPv4 or IPv6 |
 | `object network … subnet` | `cp_mgmt_network` | IPv4 (`a.b.c.d mask`) and IPv6 (`addr/prefix`); `0.0.0.0/0` & `::/0` → `Any` |
 | `object network … range` | `cp_mgmt_address_range` | IPv4/IPv6 |
 | `object network … fqdn [v4\|v6] <d> id N` | `cp_mgmt_dns_domain` | skips `v4`/`id N`; name `.<domain>`, `is_sub_domain: false`; de-duped |
 | `object-group network` | `cp_mgmt_group` | created empty, then populated (handles nesting, IPv6, CIDR) |
-| `object service` / `object-group service` | `cp_mgmt_service_tcp` / `_udp` (+ `_group`) | `eq`/`range`/`lt`/`gt`; `neq` flagged; `tcp-udp` expands |
+| `object service` / `object-group service` | `cp_mgmt_service_tcp` / `_udp` (+ `_group`) | `eq`/`range`/`lt`/`gt`; `neq` flagged; `tcp-udp` expands; names matching CP built-ins (RDP, FTP, ntp…) reuse the built-in |
 | `object-group protocol` | `cp_mgmt_service_group` of `cp_mgmt_service_other` | each protocol → "Other" service by IP-protocol number; `ip` → `Any` |
 | `object-group icmp-type` | `cp_mgmt_service_group` (ICMP service-other) | mapped to generic ICMP; per-type granularity flagged |
-| `access-list … extended` | `cp_mgmt_access_rule` | `permit`→Accept, `deny`→Drop; source+dest ports; `inactive`→disabled; `time-range`/`interface`-as-addr flagged |
+| `access-list … extended`/`advanced` | `cp_mgmt_package` + `cp_mgmt_access_rule` | each ACL → its own package ("`<acl> Network`" layer); `ifc <zone>` noted in comment (IP-only rules); `rule-id`/remark in comment; `inactive`→disabled |
 | object NAT `static` / `dynamic` | `cp_mgmt_nat_rule` (`static` / `hide`) | `dynamic interface` → hide behind `cp_hide_behind_object` |
 | manual/twice NAT | `cp_mgmt_nat_rule` | `after-auto`/`no-proxy-arp` tolerated; source/dest/service mapped |
 
@@ -193,6 +193,22 @@ parser or mapping fixes.
 10.0.0.1`, `eq https`), Check Point has no name to reference, so the parser synthesises a
 deterministic named object (`h_10.0.0.1`, `n_…`, `svc_tcp_443`) and adds it to the right
 vars file so the dependency exists before the group/rule that uses it.
+
+## Which ACLs become packages
+
+Each converted Cisco ACL becomes **its own Check Point policy package** (named after the
+ACL; rules go into that package's `"<acl> Network"` layer). By default only the ACL bound
+globally (`access-group <name> global` — e.g. the FTD `CSM_FW_ACL_`) is converted. Choose
+explicitly at parse time:
+
+```bash
+./2_parse.sh show-running-config.txt --acls CSM_FW_ACL_,inside_access_in
+```
+
+ACLs you don't select are listed under "auto-handled" in `reports/parse_summary.md`.
+`ifc <zone>` qualifiers are recorded in each rule's comment (rules match on IP objects; the
+interface dimension isn't added to the rulebase). Interfaces themselves become network groups
+(named after the nameif, holding the connected subnet) for reference.
 
 ## Known limitations (review these)
 
