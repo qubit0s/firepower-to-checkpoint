@@ -261,6 +261,10 @@
               - "{{ r_u_networks }}"
               - "{{ r_u_hosts }}"
 
+    - name: Write apply summary
+      tags: [always]
+      ansible.builtin.include_tasks: tasks/write_apply_summary.yml
+
     - name: Publish session (only when cp_publish=true)
       tags: [always]
       check_point.mgmt.cp_mgmt_publish:

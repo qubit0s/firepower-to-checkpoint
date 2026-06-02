@@ -13,8 +13,8 @@ group_vars/*.vault.yml
 vars/*.yml
 !vars/.gitkeep
 
-# Apply-time import reports (written by the playbooks on each run)
-reports/*.yml
+# Generated reports (parse_summary.md/json + apply per-stage/summary)
+reports/*
 !reports/.gitkeep
 
 # Ansible noise

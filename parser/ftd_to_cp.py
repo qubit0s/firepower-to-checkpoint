@@ -29,10 +29,12 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import re
 import sys
 from collections import OrderedDict
+from datetime import datetime
 
 import yaml
 from ciscoconfparse2 import CiscoConfParse
@@ -597,13 +599,6 @@ class Converter:
         policy = {"cp_access_rules": self.rules}
         nat = {"cp_nat_rules": self.nat_rules}
 
-        review_path = os.path.join(out_dir, "_review_unsupported.yml")
-        if self.unsupported:
-            self._dump(out_dir, "_review_unsupported.yml",
-                       {"unsupported": sorted(set(self.unsupported))})
-        elif os.path.exists(review_path):
-            os.remove(review_path)   # clear stale report when nothing is unsupported
-
         written = [
             self._dump(out_dir, "1_objects.yml", objects),
             self._dump(out_dir, "2_object_groups.yml", groups),
@@ -613,11 +608,90 @@ class Converter:
         ]
         return written, objects, groups, services, policy, nat
 
+    # ---- reporting ---------------------------------------------------------
+    def source_counts(self):
+        """Count source constructs in the Cisco config (what we found to convert)."""
+        p = self.parse
+        obj_nat = 0
+        for obj in p.find_objects(r"^object network "):
+            obj_nat += sum(1 for c in obj.children if c.text.strip().startswith("nat ("))
+        return OrderedDict([
+            ("object network", len(p.find_objects(r"^object network "))),
+            ("object service", len(p.find_objects(r"^object service "))),
+            ("object-group network", len(p.find_objects(r"^object-group network "))),
+            ("object-group service", len(p.find_objects(r"^object-group service "))),
+            ("object-group protocol", len(p.find_objects(r"^object-group protocol "))),
+            ("access-list (ACEs)", len(p.find_objects(r"^access-list \S+ extended "))),
+            ("object NAT", obj_nat),
+            ("manual NAT", len(p.find_objects(r"^nat \("))),
+        ])
+
+    def build_stats(self, objects, groups, services, policy, nat):
+        """Assemble the parse statistics dict (source vs converted vs review)."""
+        auto = (sum(1 for v in self.hosts.values() if v["comments"].startswith("auto:"))
+                + sum(1 for v in self.networks.values() if v["comments"].startswith("auto:"))
+                + sum(1 for v in self.ranges.values() if v["comments"].startswith("auto:"))
+                + sum(1 for v in self.svc_tcp.values() if v["comments"].startswith("auto:"))
+                + sum(1 for v in self.svc_udp.values() if v["comments"].startswith("auto:"))
+                + sum(1 for v in self.svc_other.values() if v["comments"].startswith("auto:")))
+        return OrderedDict([
+            ("source", self.source_counts()),
+            ("converted", OrderedDict([
+                ("hosts", len(objects["cp_hosts"])),
+                ("networks", len(objects["cp_networks"])),
+                ("address_ranges", len(objects["cp_address_ranges"])),
+                ("dns_domains", len(objects["cp_dns_domains"])),
+                ("any_aliases (0.0.0.0/0 -> Any)", len(self.any_aliases)),
+                ("network_groups", len(groups["cp_network_groups"])),
+                ("tcp_services", len(services["cp_services_tcp"])),
+                ("udp_services", len(services["cp_services_udp"])),
+                ("other_services", len(services["cp_services_other"])),
+                ("service_groups", len(services["cp_service_groups"])),
+                ("access_rules", len(policy["cp_access_rules"])),
+                ("nat_rules", len(nat["cp_nat_rules"])),
+                ("auto_generated_objects (inline literals)", auto),
+            ])),
+            ("needs_review_count", len(set(self.unsupported))),
+            ("needs_review", sorted(set(self.unsupported))),
+        ])
+
+    def write_reports(self, reports_dir, stats):
+        """Write reports/parse_summary.md (human) and parse_report.json (machine)."""
+        os.makedirs(reports_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        md = os.path.join(reports_dir, "parse_summary.md")
+        js = os.path.join(reports_dir, "parse_report.json")
+
+        lines = [f"# Parse summary ({ts})", "",
+                 "## Found in config vs converted", "",
+                 "| Source construct | In config |",
+                 "|---|---:|"]
+        for k, v in stats["source"].items():
+            lines.append(f"| {k} | {v} |")
+        lines += ["", "## Converted to Check Point objects", "",
+                  "| Object type | Count |", "|---|---:|"]
+        for k, v in stats["converted"].items():
+            lines.append(f"| {k} | {v} |")
+        lines += ["", f"## Needs manual review: {stats['needs_review_count']}", ""]
+        if stats["needs_review"]:
+            for item in stats["needs_review"]:
+                lines.append(f"- {item}")
+        else:
+            lines.append("_None — parse was clean._")
+        lines.append("")
+        with open(md, "w") as fh:
+            fh.write("\n".join(lines))
+        with open(js, "w") as fh:
+            json.dump(stats, fh, indent=2)
+        return md, js
+
 
 def main():
     ap = argparse.ArgumentParser(description="Convert Cisco FTD running-config to Check Point Ansible vars.")
     ap.add_argument("--config", required=True, help="Path to FTD show running-config file")
     ap.add_argument("--out", default="../vars", help="Output directory for *.yml vars files")
+    ap.add_argument("--reports", default="reports",
+                    help="Directory for parse_summary.md / parse_report.json")
     args = ap.parse_args()
 
     if not os.path.isfile(args.config):
@@ -626,30 +700,31 @@ def main():
     conv = Converter(args.config)
     conv.run()
     written, objects, groups, services, policy, nat = conv.emit(args.out)
+    stats = conv.build_stats(objects, groups, services, policy, nat)
+    md, js = conv.write_reports(args.reports, stats)
 
-    print("Conversion summary")
-    print("==================")
-    print(f"  hosts ............ {len(objects['cp_hosts'])}")
-    print(f"  networks ......... {len(objects['cp_networks'])}")
-    print(f"  address ranges ... {len(objects['cp_address_ranges'])}")
-    print(f"  dns domains ...... {len(objects['cp_dns_domains'])}")
-    print(f"  network groups ... {len(groups['cp_network_groups'])}")
-    print(f"  tcp services ..... {len(services['cp_services_tcp'])}")
-    print(f"  udp services ..... {len(services['cp_services_udp'])}")
-    print(f"  other services ... {len(services['cp_services_other'])}")
-    print(f"  service groups ... {len(services['cp_service_groups'])}")
-    print(f"  access rules ..... {len(policy['cp_access_rules'])}")
-    print(f"  nat rules ........ {len(nat['cp_nat_rules'])}")
-    print(f"  unsupported ...... {len(set(conv.unsupported))}")
-    print("\nWrote:")
+    col = 26
+    print("\nPARSE OVERVIEW  (found in config -> converted)")
+    print("=" * 52)
+    print("Found in config:")
+    for k, v in stats["source"].items():
+        print(f"  {k:<{col}} {v:>6}")
+    print("\nConverted to Check Point:")
+    for k, v in stats["converted"].items():
+        print(f"  {k:<{col}} {v:>6}")
+    print(f"\n  {'needs manual review':<{col}} {stats['needs_review_count']:>6}")
+
+    print("\nWrote vars:")
     for p in written:
         print("  " + p)
-    if conv.unsupported:
-        items = sorted(set(conv.unsupported))
-        print(f"\n[!] {len(items)} item(s) need manual review "
-              f"(also in _review_unsupported.yml):")
-        for line in items:
+    print(f"\nWrote reports:\n  {md}\n  {js}")
+    if stats["needs_review"]:
+        print(f"\n[!] {stats['needs_review_count']} item(s) need manual review "
+              f"(details in {md}):")
+        for line in stats["needs_review"]:
             print("    - " + line)
+    else:
+        print("\n[ok] Nothing flagged for review.")
 
 
 if __name__ == "__main__":

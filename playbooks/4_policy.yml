@@ -16,6 +16,9 @@
     - name: Import access rules
       ansible.builtin.include_tasks: tasks/policy.yml
 
+    - name: Write apply summary
+      ansible.builtin.include_tasks: tasks/write_apply_summary.yml
+
     - name: Publish session
       check_point.mgmt.cp_mgmt_publish:
       when: cp_publish | bool

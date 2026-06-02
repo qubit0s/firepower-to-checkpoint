@@ -31,13 +31,31 @@
     loop_var: rec
     label: "{{ rec.item.name | default('?') }}"
 
+- name: "Report: compute counts"
+  ansible.builtin.set_fact:
+    stage_attempted: >-
+      {{ task_results | selectattr('results', 'defined') | map(attribute='results')
+         | flatten | rejectattr('skipped', 'defined') | list | length }}
+
 - name: "Report: build payload"
   ansible.builtin.set_fact:
     report_payload:
       stage: "{{ stage_name }}"
       action: "{{ report_action | default('import') }}"
+      processed: "{{ stage_attempted | int }}"
+      ok: "{{ (stage_attempted | int) - (not_imported | length) }}"
       failed_count: "{{ not_imported | length }}"
       not_imported: "{{ not_imported }}"
+
+- name: "Report: accumulate stage stats"
+  ansible.builtin.set_fact:
+    apply_stats: >-
+      {{ apply_stats | default([]) + [{
+           'stage': stage_name,
+           'action': report_action | default('import'),
+           'processed': stage_attempted | int,
+           'ok': (stage_attempted | int) - (not_imported | length),
+           'failed': not_imported | length}] }}
 
 - name: "Report: ensure reports directory exists"
   delegate_to: localhost
@@ -59,9 +77,10 @@
       # Generated {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
       {{ report_payload | to_nice_yaml(indent=2) }}
 
-- name: "Report: summarise failures for {{ stage_name }}"
+- name: "Report: stage summary for {{ stage_name }}"
   ansible.builtin.debug:
     msg: >-
-      {{ stage_name }}: {{ not_imported | length }} item(s) failed to
-      {{ report_action | default('import') }} -> reports/{{ stage_name }}_not_imported.yml
-  when: not_imported | length > 0
+      {{ stage_name }}: processed={{ stage_attempted | int }}
+      ok={{ (stage_attempted | int) - (not_imported | length) }}
+      failed={{ not_imported | length }}
+      {{ '-> reports/' ~ stage_name ~ '_not_imported.yml' if not_imported | length > 0 else '' }}

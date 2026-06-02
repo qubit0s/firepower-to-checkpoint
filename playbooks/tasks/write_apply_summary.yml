@@ -1,0 +1,37 @@
+---
+# ===========================================================================
+# Writes reports/apply_summary.md: a per-stage rollup (processed / ok / failed)
+# from the apply_stats fact accumulated by record_not_imported.yml.
+# Included at the end of a run (site.yml and the per-stage wrappers).
+# ===========================================================================
+- name: "Summary: compute totals"
+  ansible.builtin.set_fact:
+    apply_tot_processed: "{{ apply_stats | default([]) | map(attribute='processed') | sum }}"
+    apply_tot_ok: "{{ apply_stats | default([]) | map(attribute='ok') | sum }}"
+    apply_tot_failed: "{{ apply_stats | default([]) | map(attribute='failed') | sum }}"
+
+- name: "Summary: write apply_summary.md"
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.copy:
+    mode: "0644"
+    dest: "{{ playbook_dir }}/../reports/apply_summary.md"
+    content: |
+      # Apply summary ({{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }})
+
+      published: {{ cp_publish | default(false) }}
+
+      | Stage | Action | Processed | OK | Failed |
+      |---|---|---:|---:|---:|
+      {% for s in apply_stats | default([]) %}
+      | {{ s.stage }} | {{ s.action }} | {{ s.processed }} | {{ s.ok }} | {{ s.failed }} |
+      {% endfor %}
+      | **total** |  | **{{ apply_tot_processed }}** | **{{ apply_tot_ok }}** | **{{ apply_tot_failed }}** |
+
+      Per-stage failure detail (object + reason) is in reports/<stage>_not_imported.yml.
+
+- name: "Summary: print apply totals"
+  ansible.builtin.debug:
+    msg: >-
+      APPLY TOTAL: processed={{ apply_tot_processed }} ok={{ apply_tot_ok }}
+      failed={{ apply_tot_failed }} -> reports/apply_summary.md

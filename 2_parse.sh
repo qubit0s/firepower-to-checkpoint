@@ -19,6 +19,6 @@ if [ ! -x ".venv/bin/python" ]; then
   exit 1
 fi
 
-.venv/bin/python parser/ftd_to_cp.py --config "$CONFIG" --out vars
+.venv/bin/python parser/ftd_to_cp.py --config "$CONFIG" --out vars --reports reports
 echo
-echo "Review vars/*.yml (and vars/_review_unsupported.yml) before applying."
+echo "Review vars/*.yml and reports/parse_summary.md before applying."
