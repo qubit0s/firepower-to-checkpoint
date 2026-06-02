@@ -165,6 +165,8 @@ class Converter:
         self.any_aliases = set()
         # FQDN objects: Cisco object name -> Check Point dns-domain name (".<fqdn>")
         self.fqdn_aliases = {}
+        # service groups equivalent to Any (e.g. contained 'service-object ip')
+        self.svc_any_aliases = set()
 
     def _ref(self, name):
         """Resolve a network-object reference: 0.0.0.0/0 -> 'Any', FQDN object -> its
@@ -711,6 +713,59 @@ class Converter:
                     note += f", security-level {seclevel}"
                 self.zones[cp_name(nameif)] = {"comments": note}
 
+    def _resolve_any_groups(self):
+        """Check Point's predefined 'Any' cannot be a group member. A group that
+        ended up containing 'Any' (from 0.0.0.0/0 or service-object ip) is therefore
+        equivalent to Any: drop the group and rewrite every reference to it to 'Any'.
+        Iterates to a fixpoint so groups-of-any-groups collapse too."""
+        # --- network groups ---
+        changed = True
+        while changed:
+            changed = False
+            for n, v in list(self.net_groups.items()):
+                if n in self.any_aliases:
+                    continue
+                v["members"] = [("Any" if m in self.any_aliases else m) for m in v["members"]]
+                if "Any" in v["members"]:
+                    self.any_aliases.add(n)
+                    self.unsupported.append(
+                        f"network group {n}: contains 0.0.0.0/0 -> treated as Any "
+                        f"('Any' can't be a group member); references rewritten to Any")
+                    changed = True
+        for n in self.any_aliases:
+            self.net_groups.pop(n, None)
+        for v in self.net_groups.values():
+            v["members"] = dedup(["Any" if m in self.any_aliases else m for m in v["members"]])
+        for r in self.rules:
+            r["source"] = dedup(["Any" if x in self.any_aliases else x for x in r["source"]])
+            r["destination"] = dedup(["Any" if x in self.any_aliases else x for x in r["destination"]])
+        for r in self.nat_rules:
+            for k in ("original_source", "original_destination",
+                      "translated_source", "translated_destination"):
+                if r.get(k) in self.any_aliases:
+                    r[k] = "Any"
+
+        # --- service groups ---
+        changed = True
+        while changed:
+            changed = False
+            for n, v in list(self.svc_groups.items()):
+                if n in self.svc_any_aliases:
+                    continue
+                v["members"] = [("Any" if m in self.svc_any_aliases else m) for m in v["members"]]
+                if "Any" in v["members"]:
+                    self.svc_any_aliases.add(n)
+                    self.unsupported.append(
+                        f"service group {n}: contains 'ip'/Any -> treated as Any service; "
+                        f"references rewritten to Any")
+                    changed = True
+        for n in self.svc_any_aliases:
+            self.svc_groups.pop(n, None)
+        for v in self.svc_groups.values():
+            v["members"] = dedup(["Any" if m in self.svc_any_aliases else m for m in v["members"]])
+        for r in self.rules:
+            r["service"] = dedup(["Any" if x in self.svc_any_aliases else x for x in r["service"]])
+
     def run(self):
         self.parse_interfaces()
         self.parse_network_objects()
@@ -719,6 +774,7 @@ class Converter:
         self.parse_service_groups()
         self.parse_access_lists()
         self.parse_nat()
+        self._resolve_any_groups()
 
     # ---- YAML emit ---------------------------------------------------------
     def _dump(self, out_dir, fname, data):

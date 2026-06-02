@@ -26,14 +26,17 @@ cp_default_color: "black"
 # unpublished run rolls into multiple sessions and changes get split. Publishing
 # per stage commits each stage well within the window.
 #
-# false (default): create everything but DON'T publish, for a pre-publish review.
-#   Only reliable for SMALLER configs that finish within one session window --
-#   for large migrations (hundreds of objects) set cp_publish: true.
+# true (default): publish per stage -- reliable at any size, and later stages can
+#   see earlier objects (no "object not found" cascades). Review the published
+#   result in SmartConsole; undo.yml can roll it back.
+# false: create everything but DON'T publish, for a pre-publish review. Only
+#   reliable for SMALL configs that finish within one ~10-min session window;
+#   larger runs roll into multiple sessions and references fail "not found".
 #
 # Check Point sessions are private until published: unpublished changes are only
 # visible within the session that made them (Manage & Settings > Sessions; you may
 # need to take the session over if you're a different admin than the API key).
-cp_publish: false
+cp_publish: true
 
 # --- NAT hide-behind target ---------------------------------------------------
 # For Cisco "nat ... dynamic interface" (PAT / hide behind the firewall IP), the
