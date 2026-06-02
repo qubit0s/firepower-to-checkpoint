@@ -165,6 +165,14 @@ def cp_service_ref(name):
     return SERVICE_ALIASES.get(name.lower(), name)
 
 
+def nat_obj(tok):
+    """Map a NAT-rule field token to a Check Point object name, or None when it
+    means 'any'. Check Point NAT fields must be OMITTED (left blank) to mean any;
+    passing the literal 'Any' object fails 404 'Requested object [Any] not found'
+    (verified via the Check Point docs MCP). Callers skip the field when None."""
+    return None if tok in ("any", "any4", "any6") else cp_name(tok)
+
+
 def cp_name(raw):
     """Sanitise a Cisco identifier into a legal Check Point object name.
     Check Point names may not contain spaces and a limited punctuation set;
@@ -845,10 +853,12 @@ class Converter:
                 "name": f"manualnat-{cp_name(real_src)}-{cp_name(mapped_src)}",
                 "type": "manual",
                 "method": "static" if kind == "static" else "hide",
-                "original_source": "Any" if real_src == "any" else cp_name(real_src),
                 "comments": f"manual NAT ({real_if},{mapped_if}) source {kind}",
                 "enabled": True,
             }
+            # 'any' fields are omitted (blank = any); see nat_obj().
+            if nat_obj(real_src):
+                rule["original_source"] = nat_obj(real_src)
             if hide_iface:
                 # Source hide behind firewall IP is handled by the gateway NAT checkbox;
                 # keep this rule only for its destination/service translation.
@@ -856,17 +866,19 @@ class Converter:
                     f"manual NAT source '{cp_name(real_src)}': source hide behind firewall IP "
                     f"is via the gateway NAT checkbox; only its destination/service "
                     f"translation is imported as a rule")
-            elif mapped_src != real_src:                 # real translation
-                rule["translated_source"] = cp_name(mapped_src)
+            elif mapped_src != real_src and nat_obj(mapped_src):   # real translation
+                rule["translated_source"] = nat_obj(mapped_src)
             # else identity (no translation) -> omit translated_source entirely
             if m.group(6):  # destination static REAL MAPPED
-                rule["original_destination"] = cp_name(m.group(6))
-                if m.group(7) != m.group(6):
-                    rule["translated_destination"] = cp_name(m.group(7))
+                if nat_obj(m.group(6)):
+                    rule["original_destination"] = nat_obj(m.group(6))
+                if m.group(7) != m.group(6) and nat_obj(m.group(7)):
+                    rule["translated_destination"] = nat_obj(m.group(7))
             if m.group(8):  # service REAL MAPPED
-                rule["original_service"] = cp_name(m.group(8))
-                if m.group(9) != m.group(8):
-                    rule["translated_service"] = cp_name(m.group(9))
+                if nat_obj(m.group(8)):
+                    rule["original_service"] = nat_obj(m.group(8))
+                if m.group(9) != m.group(8) and nat_obj(m.group(9)):
+                    rule["translated_service"] = nat_obj(m.group(9))
             self.nat_rules.append(rule)
 
     # ======================================================================
