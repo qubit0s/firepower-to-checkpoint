@@ -124,6 +124,13 @@ def mask_to_prefix(mask):
         return None
 
 
+def prefix_to_mask(plen):
+    """IPv4 prefix length -> dotted mask, e.g. 24 -> 255.255.255.0."""
+    plen = int(plen)
+    bits = (0xffffffff >> (32 - plen) << (32 - plen)) if plen else 0
+    return ".".join(str((bits >> (24 - 8 * i)) & 0xff) for i in range(4))
+
+
 def resolve_port(token):
     """Map an ASA port token (name or number) to a numeric string. Returns (port_str, ok)."""
     token = token.strip()
@@ -176,6 +183,15 @@ class Converter:
         if name not in self.networks:
             self.networks[name] = {"subnet": subnet, "mask_length": plen,
                                    "comments": "auto: inline network literal"}
+        self._known_net.add(name)
+        return name
+
+    def _auto_network6(self, addr, plen):
+        """Inline IPv6 network literal -> cp_mgmt_network (subnet + mask_length, IPv6)."""
+        name = cp_name(f"n6_{addr}_{plen}")
+        if name not in self.networks:
+            self.networks[name] = {"subnet": addr, "mask_length": int(plen),
+                                   "comments": "auto: inline IPv6 network literal"}
         self._known_net.add(name)
         return name
 
@@ -314,9 +330,19 @@ class Converter:
                     members.append(self._auto_range(parts[2], parts[3]))
                 elif t.startswith("network-object "):
                     parts = t.split()
-                    # 'network-object 10.0.0.0 255.0.0.0'
-                    if len(parts) >= 3 and re.match(r"\d+\.\d+\.\d+\.\d+", parts[1]):
-                        members.append(self._auto_network(parts[1], parts[2]))
+                    tok = parts[1]
+                    if "/" in tok and tok.split("/", 1)[1] == "0":
+                        members.append("Any")                 # ::/0 or 0.0.0.0/0 == Any
+                    elif ":" in tok and "/" in tok:           # IPv6 CIDR
+                        addr, plen = tok.split("/", 1)
+                        members.append(self._auto_network6(addr, plen))
+                    elif ":" in tok:                          # bare IPv6 host
+                        members.append(self._auto_host(tok))
+                    elif "/" in tok:                          # IPv4 CIDR (a.b.c.d/n)
+                        addr, plen = tok.split("/", 1)
+                        members.append(self._auto_network(addr, prefix_to_mask(plen)))
+                    elif len(parts) >= 3 and re.match(r"\d+\.\d+\.\d+\.\d+", tok):
+                        members.append(self._auto_network(tok, parts[2]))  # 'a.b.c.d mask'
                     else:
                         self.unsupported.append(f"group {name}: cannot parse '{t}'")
                 else:
@@ -373,6 +399,16 @@ class Converter:
                     continue
                 if t.startswith("group-object "):
                     members.append(cp_name(t.split("group-object ", 1)[1]))
+                    continue
+                # service-object <protocol>  (no port): ip -> Any, icmp/esp/gre/.. -> service-other
+                m = re.match(r"service-object (\S+)$", t)
+                if m:
+                    member = self._auto_protocol(m.group(1))
+                    if member:
+                        members.append(member)
+                    else:
+                        self.unsupported.append(
+                            f"service-group {name}: unsupported 'service-object {m.group(1)}'")
                     continue
                 self.unsupported.append(f"service-group {name}: cannot parse '{t}'")
             self.svc_groups[name] = {"members": members, "comments": comments}
@@ -524,7 +560,11 @@ class Converter:
         # --- Manual / twice NAT: top-level 'nat (real,mapped) source ...'
         for nat in self.parse.find_objects(r"^nat \("):
             t = nat.text.strip()
-            m = re.match(r"nat \((\S+?),(\S+?)\) source (static|dynamic) (\S+) (\S+)"
+            # Tolerate position/section keywords (after-auto, after-object, line N) between
+            # the interface pair and 'source', and ignore trailing flags (no-proxy-arp,
+            # route-lookup, dns, inactive, unidirectional, description ...).
+            m = re.match(r"nat \((\S+?),(\S+?)\)(?:\s+(?:after-auto|after-object|inactive))?"
+                         r"(?:\s+line\s+\d+)? source (static|dynamic) (\S+) (\S+)"
                          r"(?: destination static (\S+) (\S+))?(?: service (\S+) (\S+))?", t)
             if not m:
                 self.unsupported.append(f"manual NAT not parsed: '{t}'")
