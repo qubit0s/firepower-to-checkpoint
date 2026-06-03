@@ -80,7 +80,7 @@ PROTOCOL_NAMES = {
 HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP",
                    "reusing Check Point predefined", "mapped to Check Point predefined",
                    "not selected for conversion", "no network group created", "renamed to",
-                   "hide behind firewall IP")
+                   "hide behind firewall IP", "by rule-id")
 
 _USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -679,14 +679,36 @@ class Converter:
                 self.unsupported.append(
                     f"ACL '{a}' not selected for conversion (skipped); pass --acls to include it")
 
-        # remark text per rule-id (FTD: 'remark rule-id N: <ACCESS/L7 RULE>: name')
+        # remark text per rule-id. FTD writes (up to) two remarks per rule:
+        #   remark rule-id N: ACCESS POLICY: <acp> - <section>
+        #   remark rule-id N: L7 RULE: <FMC access-rule name>
+        # The 'L7 RULE' line carries the original FMC rule name -- used to name the
+        # merged Check Point rule.
         remarks = {}
         for r in self.parse.find_objects(r"^access-list \S+ remark "):
             m = re.search(r"rule-id (\d+):\s*(.*)$", r.text)
-            if m:
-                remarks[m.group(1)] = m.group(2).strip()
+            if not m:
+                continue
+            rid, text = m.group(1), m.group(2).strip()
+            info = remarks.setdefault(rid, {"name": None, "policy": None})
+            lm = re.match(r"L7 RULE:\s*(.+)$", text, re.I)
+            pm = re.match(r"ACCESS POLICY:\s*(.+)$", text, re.I)
+            if lm:
+                info["name"] = lm.group(1).strip()
+            elif pm:
+                info["policy"] = pm.group(1).strip()
 
-        counters = {}
+        # FMC expands ONE access rule into MANY ACEs (cross-product of src/dst nets,
+        # ports, URLs, VLANs, and zone pairs) that all carry the SAME rule-id
+        # (verified against Cisco rule-expansion docs). We accumulate ACEs into
+        # groups keyed by rule-id and union their src/dst/service to rebuild the
+        # original rule. ACEs with NO rule-id (hand-written ASA ACLs) are never
+        # merged -- each gets its own group.
+        self._ace_groups = {}
+        self._ace_order = []
+        self._ace_seq = 0
+        self._used_rule_names = {}
+        self._standalone_n = {}
         for acl in self.parse.find_objects(ace_re):
             toks = acl.text.split()
             if len(toks) < 5:
@@ -699,16 +721,27 @@ class Converter:
             # may not know -- user/identity, security-group, fqdn-in-ACL, etc.).
             # Flag it as needs-attention and keep going so the rest still convert.
             try:
-                self._parse_ace(acl, toks, aclname, binding, remarks, counters)
+                self._parse_ace(acl, toks, aclname, binding, remarks)
             except Exception as exc:  # noqa: BLE001 - any parse failure is non-fatal
                 self.unsupported.append(
                     f"acl {aclname}: could not parse rule "
                     f"'{acl.text.strip()[:90]}' ({type(exc).__name__}: {exc}); skipped, review")
 
-    def _parse_ace(self, acl, toks, aclname, binding, remarks, counters):
-        """Convert one matched 'access-list ... extended|advanced ...' line into a
-        rule dict appended to self.rules. Raises on unexpected token shapes; the
-        caller treats any exception as a non-fatal 'needs attention' flag."""
+        # Flush merged groups into self.rules, preserving first-appearance order.
+        for key in self._ace_order:
+            self.rules.append(self._finalize_ace_group(self._ace_groups[key]))
+        n_aces = sum(g["ace_count"] for g in self._ace_groups.values())
+        n_rules = len(self._ace_order)
+        if n_aces > n_rules:
+            self.unsupported.append(
+                f"merged {n_aces} FMC-expanded ACEs into {n_rules} rules by rule-id "
+                f"({n_aces - n_rules} expanded ACEs collapsed back to their original "
+                f"FMC rules)")
+
+    def _parse_ace(self, acl, toks, aclname, binding, remarks):
+        """Parse one ACE and merge it into its rule-id group (or a standalone group
+        when there is no rule-id). Raises on unexpected token shapes; the caller
+        treats any exception as a non-fatal 'needs attention' flag."""
         action_word = toks[3]
         proto = toks[4]
         rest = toks[5:]
@@ -748,13 +781,8 @@ class Converter:
                     self.unsupported.append(
                         f"acl {aclname}: unknown protocol '{proto}' -> Any; review")
 
-        # interface (ifc) qualifiers are NOT wired into the rule (no zones in
-        # the rulebase); they're recorded in the comment for reference.
-        source = dedup(src)
-        destination = dedup(dst)
-        ifc_note = ""
-        if szone or dzone:
-            ifc_note = f" [ifc {szone or 'any'} -> {dzone or 'any'}]"
+        # interface (ifc) zone pair -> recorded for the comment only (no zones in rules).
+        zone = f"{szone or 'any'}->{dzone or 'any'}" if (szone or dzone) else ""
 
         if any(t in ("object", "object-group", "ifc") for t in rest):
             self.unsupported.append(
@@ -765,27 +793,94 @@ class Converter:
         package = cp_name(aclname)
         self.packages[package] = {"comments": f"from Cisco ACL {aclname} "
                                               f"({binding.get(aclname, 'unbound')})"}
-        counters[aclname] = counters.get(aclname, 0) + 1
-        note = f"from {aclname}"
+        # FMC actions: permit/trust -> Accept (trust = allow w/o inspection); deny -> Drop.
+        action = "Accept" if action_word in ("permit", "trust") else "Drop"
+
+        # Group key: same rule-id merges; no rule-id -> unique standalone group.
         if rule_id:
-            note += f" rule-id {rule_id}"
-            if rule_id in remarks:
-                note += f" [{remarks[rule_id]}]"
-        note += ifc_note
-        if inactive:
+            key = (aclname, "rid", rule_id)
+        else:
+            self._ace_seq += 1
+            key = (aclname, "line", self._ace_seq)
+        grp = self._ace_groups.get(key)
+        if grp is None:
+            info = remarks.get(rule_id) or {} if rule_id else {}
+            grp = {
+                "aclname": aclname, "package": package, "rule_id": rule_id,
+                "l7name": info.get("name"), "policy": info.get("policy"),
+                "source": [], "destination": [], "service": [],
+                "zones": [], "actions": [], "inactive": False, "ace_count": 0,
+            }
+            self._ace_groups[key] = grp
+            self._ace_order.append(key)
+        grp["source"].extend(src)
+        grp["destination"].extend(dst)
+        grp["service"].extend(svc)
+        if zone and zone not in grp["zones"]:
+            grp["zones"].append(zone)
+        if action not in grp["actions"]:
+            grp["actions"].append(action)
+        grp["inactive"] = grp["inactive"] or inactive
+        grp["ace_count"] += 1
+
+    @staticmethod
+    def _collapse_any(items):
+        """Dedup a source/dest/service list; if it contains 'Any', the whole list
+        is Any (a union with Any is Any -- matches FMC, where any ACE with an 'any'
+        dimension makes that dimension any for the rule)."""
+        d = dedup(items)
+        return ["Any"] if "Any" in d else (d or ["Any"])
+
+    def _finalize_ace_group(self, grp):
+        """Turn an accumulated rule-id group into a single Check Point access rule,
+        unioning the source/destination/service collected across its ACEs."""
+        package = grp["package"]
+        if grp["l7name"]:
+            name = cp_name(grp["l7name"])
+        elif grp["rule_id"]:
+            name = f"{package}-{grp['rule_id']}"
+        else:
+            self._standalone_n[package] = self._standalone_n.get(package, 0) + 1
+            name = f"{package}-{self._standalone_n[package]}"
+        # Names must be unique within the layer (package).
+        used = self._used_rule_names.setdefault(package, set())
+        uniq, i = name, 1
+        while uniq in used:
+            i += 1
+            uniq = f"{name}-{i}"
+        used.add(uniq)
+
+        action = grp["actions"][0] if grp["actions"] else "Accept"
+        note = f"from {grp['aclname']}"
+        if grp["rule_id"]:
+            note += f" rule-id {grp['rule_id']}"
+        if grp["l7name"]:
+            note += f" [name: {grp['l7name']}]"
+        if grp["policy"]:
+            note += f" [policy: {grp['policy']}]"
+        if grp["zones"]:
+            note += f" [zones: {', '.join(grp['zones'])}]"
+        if grp["ace_count"] > 1:
+            note += f" (merged {grp['ace_count']} ACEs)"
+        if len(grp["actions"]) > 1:
+            self.unsupported.append(
+                f"access rule {uniq}: ACEs under rule-id {grp['rule_id']} have mixed "
+                f"actions {grp['actions']}; used '{action}' -- review")
+            note += f" [mixed actions {grp['actions']}, used {action}]"
+        if grp["inactive"]:
             note += " [inactive]"
-        self.rules.append({
-            "acl": aclname,
+        return {
+            "acl": grp["aclname"],
             "package": package,
             "layer": f"{package} Network",
-            "name": f"{package}-{counters[aclname]}",
-            "action": "Accept" if action_word == "permit" else "Drop",
-            "source": source,
-            "destination": destination,
-            "service": svc,
-            "enabled": not inactive,
+            "name": uniq,
+            "action": action,
+            "source": self._collapse_any(grp["source"]),
+            "destination": self._collapse_any(grp["destination"]),
+            "service": self._collapse_any(grp["service"]),
+            "enabled": not grp["inactive"],
             "comments": note,
-        })
+        }
 
     # ======================================================================
     # 6. NAT  -> nat.yml
