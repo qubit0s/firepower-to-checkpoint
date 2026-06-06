@@ -781,7 +781,16 @@ class Converter:
                     self.unsupported.append(
                         f"acl {aclname}: unknown protocol '{proto}' -> Any; review")
 
-        # interface (ifc) zone pair -> recorded for the comment only (no zones in rules).
+        # Wire the interface (ifc) scope into the rule via the interface group we
+        # created from that nameif: when the ACE address is 'any' but it is scoped
+        # to an interface, use that interface's network group instead of Any, so
+        # the rule reflects the interface dimension. (Specific objects are kept as
+        # is -- they are already more precise than the interface.)
+        if src == ["Any"] and szone in self.iface_groups:
+            src = [szone]
+        if dst == ["Any"] and dzone in self.iface_groups:
+            dst = [dzone]
+        # The original ifc zone pair is still recorded in the rule comment.
         zone = f"{szone or 'any'}->{dzone or 'any'}" if (szone or dzone) else ""
 
         if any(t in ("object", "object-group", "ifc") for t in rest):
