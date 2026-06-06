@@ -29,6 +29,7 @@ Usage:
 """
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -273,6 +274,17 @@ class Converter:
         plen = mask_to_prefix(mask)
         if plen == 0:
             return "Any"   # 0.0.0.0/0 == Check Point predefined "Any"
+        # Normalise to the network address by clearing host bits -- Check Point
+        # requires the network address, so an interface IP like 10.10.0.1/16 must
+        # become the subnet 10.10.0.0/16. (Cisco object networks are already
+        # network addresses; this only changes host-bit-set inputs, e.g. an
+        # interface 'ip address'.)
+        if plen is not None:
+            try:
+                net = ipaddress.ip_network(f"{subnet}/{plen}", strict=False)
+                subnet = str(net.network_address)
+            except ValueError:
+                pass
         name = cp_name(f"n_{subnet}_{plen if plen is not None else mask}")
         if name not in self.networks:
             self.networks[name] = {"subnet": subnet, "mask_length": plen,
@@ -992,8 +1004,11 @@ class Converter:
     def parse_interfaces(self):
         """Each Cisco interface 'nameif' becomes a Check Point network GROUP named
         after the nameif, containing the interface's directly-connected network
-        (from 'ip address'). Created for grouping/reference; NOT wired into rules
-        (most deployments don't use the interface dimension in the rulebase)."""
+        (the masked network address from 'ip address', e.g. 10.10.0.0/16). ACEs
+        scoped to that interface ('ifc <nameif>') with an 'any' address use this
+        group instead of Any (see _parse_ace). NOTE: this is only the connected
+        subnet -- networks routed THROUGH the interface are not included; extend
+        the group if the interface fronts more than its connected subnet."""
         for obj in self.parse.find_objects(r"^interface "):
             nameif = seclevel = ip = mask = None
             for c in obj.children:
