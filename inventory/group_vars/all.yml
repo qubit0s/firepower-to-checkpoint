@@ -11,10 +11,12 @@
 # encrypted group_vars/all.vault.yml.)
 
 # --- Target policy / package --------------------------------------------------
-# Access policy: each converted Cisco ACL becomes its OWN policy package (named
-# after the ACL); rules go into that package's "<package> Network" layer. Choose
-# which ACLs to convert at parse time:  ./2_parse.sh <config> --acls NAME1,NAME2
-# (default: the ACL bound 'access-group <name> global').
+# Access policy: each converted Cisco ACL becomes its OWN policy package; rules go
+# into that package's "<package> Network" layer. The package NAME defaults to the
+# FMC Access Control Policy name (from the config's 'ACCESS POLICY' remark), else
+# the ACL name. Both selection and naming are set at PARSE time, not here:
+#   ./2_parse.sh <config> --acls NAME1,NAME2     # which ACLs (default: global ACL)
+#   ./2_parse.sh <config> --package "DC1-Policy" # override the package name
 #
 # Policy package that migrated NAT rules are written into.
 cp_nat_package: "Standard"

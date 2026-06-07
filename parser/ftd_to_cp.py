@@ -81,7 +81,7 @@ PROTOCOL_NAMES = {
 HANDLED_MARKERS = ("treated as Any", "rewritten to Any", "mapped to generic ICMP",
                    "reusing Check Point predefined", "mapped to Check Point predefined",
                    "not selected for conversion", "no network group created", "renamed to",
-                   "hide behind firewall IP", "by rule-id")
+                   "hide behind firewall IP", "by rule-id", "policy package named")
 
 _USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -239,6 +239,9 @@ class Converter:
         self.packages = OrderedDict()     # package name -> {comments}  (one per converted ACL)
         self.iface_groups = set()         # net_group names that came from interfaces
         self.selected_acls = None         # None -> default (global ACL); else list of ACL names
+        self.pkg_overrides = {}           # aclname -> chosen package name (from --package)
+        self.pkg_override_single = None   # single --package name (resolved to one ACL)
+        self._acl_policy = {}             # aclname -> FMC Access Control Policy name
         self.global_acl = None            # ACL bound by 'access-group <name> global'
         self.rules = []                   # list of dicts
         self.nat_rules = []               # list of dicts
@@ -691,13 +694,26 @@ class Converter:
                 self.unsupported.append(
                     f"ACL '{a}' not selected for conversion (skipped); pass --acls to include it")
 
+        # A single --package name applies to the converted ACL: the only one when
+        # --acls names exactly one, else the globally-bound ACL, else the first.
+        if self.pkg_override_single and targets:
+            if len(targets) == 1:
+                self.pkg_overrides.setdefault(targets[0], self.pkg_override_single)
+            elif self.global_acl in targets:
+                self.pkg_overrides.setdefault(self.global_acl, self.pkg_override_single)
+            else:
+                self.pkg_overrides.setdefault(targets[0], self.pkg_override_single)
+
         # remark text per rule-id. FTD writes (up to) two remarks per rule:
         #   remark rule-id N: ACCESS POLICY: <acp> - <section>
         #   remark rule-id N: L7 RULE: <FMC access-rule name>
-        # The 'L7 RULE' line carries the original FMC rule name -- used to name the
-        # merged Check Point rule.
+        # The 'L7 RULE' line carries the FMC access-rule name (used to name the
+        # merged rule); the 'ACCESS POLICY' line carries the FMC Access Control
+        # Policy name (used to name the package, unless --package overrides).
         remarks = {}
         for r in self.parse.find_objects(r"^access-list \S+ remark "):
+            rtoks = r.text.split()
+            racl = rtoks[1] if len(rtoks) > 1 else None
             m = re.search(r"rule-id (\d+):\s*(.*)$", r.text)
             if not m:
                 continue
@@ -709,6 +725,10 @@ class Converter:
                 info["name"] = lm.group(1).strip()
             elif pm:
                 info["policy"] = pm.group(1).strip()
+                # Strip the trailing section (' - Mandatory' / ' - Default').
+                acp = re.sub(r"\s*-\s*(Mandatory|Default)\s*$", "", pm.group(1).strip())
+                if racl and acp and racl not in self._acl_policy:
+                    self._acl_policy[racl] = acp
 
         # FMC expands ONE access rule into MANY ACEs (cross-product of src/dst nets,
         # ports, URLs, VLANs, and zone pairs) that all carry the SAME rule-id
@@ -739,6 +759,15 @@ class Converter:
                     f"acl {aclname}: could not parse rule "
                     f"'{acl.text.strip()[:90]}' ({type(exc).__name__}: {exc}); skipped, review")
 
+        # Report how each ACL was named into a package (auto-handled, FYI).
+        for acl in dict.fromkeys(g["aclname"] for g in self._ace_groups.values()):
+            pkg = self._package_name(acl)
+            if pkg != cp_name(acl):
+                why = ("--package override" if acl in self.pkg_overrides
+                       else "FMC Access Control Policy name")
+                self.unsupported.append(
+                    f"ACL '{acl}' -> policy package named '{pkg}' (from {why})")
+
         # Flush merged groups into self.rules, preserving first-appearance order.
         for key in self._ace_order:
             self.rules.append(self._finalize_ace_group(self._ace_groups[key]))
@@ -749,6 +778,16 @@ class Converter:
                 f"merged {n_aces} FMC-expanded ACEs into {n_rules} rules by rule-id "
                 f"({n_aces - n_rules} expanded ACEs collapsed back to their original "
                 f"FMC rules)")
+
+    def _package_name(self, aclname):
+        """Check Point policy package name for a Cisco ACL: an explicit --package
+        override, else the FMC Access Control Policy name from the ACL's
+        'ACCESS POLICY:' remark, else the ACL name itself."""
+        if aclname in self.pkg_overrides:
+            return cp_name(self.pkg_overrides[aclname])
+        if aclname in self._acl_policy:
+            return cp_name(self._acl_policy[aclname])
+        return cp_name(aclname)
 
     def _parse_ace(self, acl, toks, aclname, binding, remarks):
         """Parse one ACE and merge it into its rule-id group (or a standalone group
@@ -811,7 +850,7 @@ class Converter:
         if "time-range" in toks:
             self.unsupported.append(f"acl {aclname}: time-range not migrated; review")
 
-        package = cp_name(aclname)
+        package = self._package_name(aclname)
         self.packages[package] = {"comments": f"from Cisco ACL {aclname} "
                                               f"({binding.get(aclname, 'unbound')})"}
         # FMC actions: permit/trust -> Accept (trust = allow w/o inspection); deny -> Drop.
@@ -1350,6 +1389,11 @@ def main():
     ap.add_argument("--acls", default="",
                     help="Comma-separated Cisco ACL names to convert (each -> its own "
                          "policy package). Default: the ACL bound 'access-group <name> global'.")
+    ap.add_argument("--package", default="",
+                    help="Override the policy package name. Either a single name "
+                         "(applied to the converted ACL), e.g. --package 'DC1-Policy', "
+                         "or per-ACL mappings 'ACL=Name,ACL2=Name2'. Default: the FMC "
+                         "Access Control Policy name from the config, else the ACL name.")
     args = ap.parse_args()
 
     if not os.path.isfile(args.config):
@@ -1368,6 +1412,19 @@ def main():
     conv = Converter(args.config)
     if args.acls.strip():
         conv.selected_acls = [a.strip() for a in args.acls.split(",") if a.strip()]
+    if args.package.strip():
+        spec = args.package.strip()
+        if "=" in spec:
+            # Per-ACL mapping: ACL=Name,ACL2=Name2
+            for pair in spec.split(","):
+                if "=" in pair:
+                    acl, nm = pair.split("=", 1)
+                    if acl.strip() and nm.strip():
+                        conv.pkg_overrides[acl.strip()] = nm.strip()
+        else:
+            # Single name -> the converted ACL (explicit --acls if exactly one,
+            # else the globally-bound ACL). Resolved after the config is parsed.
+            conv.pkg_override_single = spec
     conv.run()
     written, objects, groups, services, policy, nat = conv.emit(args.out)
     stats = conv.build_stats(objects, groups, services, policy, nat)

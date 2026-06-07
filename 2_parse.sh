@@ -31,4 +31,7 @@ fi
 # The parser prints a colored overview + a clear "what's auto-handled vs needs
 # attention" verdict and the next step. Extra args pass through, e.g.:
 #   ./2_parse.sh <config> --acls CSM_FW_ACL_,inside_access_in
+#   ./2_parse.sh <config> --package "DC1-Policy"        # name the policy package
+# (--package defaults to the FMC Access Control Policy name; override as above,
+#  or per-ACL: --package "CSM_FW_ACL_=Edge,ACL_in=Inside")
 .venv/bin/python parser/ftd_to_cp.py --config "$CONFIG" --out vars --reports reports "${@:2}"
