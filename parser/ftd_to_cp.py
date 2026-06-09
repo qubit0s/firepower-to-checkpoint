@@ -810,7 +810,8 @@ class Converter:
         sp, rest = self._consume_ports(proto, rest)  # optional source port
         if sp:
             self.unsupported.append(
-                f"acl {aclname}: source-port match not represented in CP service; review")
+                f"acl {aclname}: source-port match {sp} not represented in CP service; "
+                f"review rule: '{acl.text.strip()}'")
         dzone, rest = self._consume_ifc(rest)        # destination 'ifc <zone>'
         dst, rest = self._resolve_addr_tokens(rest)
         svc, rest = self._consume_ports(proto, rest)  # optional destination port

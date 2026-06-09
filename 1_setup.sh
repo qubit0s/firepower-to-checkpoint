@@ -28,7 +28,7 @@ echo "==> 4/4  Finalising"
 chmod +x 2_parse.sh 3_apply.sh 2>/dev/null || true
 
 # Colored completion banner (plain text if not a TTY)
-if [ -t 1 ]; then G="\033[1;32m"; B="\033[1m"; N="\033[0m"; else G=""; B=""; N=""; fi
+if [ -t 1 ]; then G=$'\033[1;32m'; B=$'\033[1m'; N=$'\033[0m'; else G=""; B=""; N=""; fi
 printf "\n${G}%s${N}\n" "✔ Setup complete."
 
 cat <<DONE
