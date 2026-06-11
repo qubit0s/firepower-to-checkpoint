@@ -23,6 +23,22 @@ cp_nat_package: "Standard"
 # Track setting for every migrated access rule (Log / None / Extended Log / Detailed Log).
 cp_rule_track: "Log"
 
+# Some Check Point names exist as BOTH a TCP/UDP service AND an AppWiki application
+# (e.g. rdp, sip, h323). When a rule's reference resolves to the application
+# variant, Check Point requires (a) the layer's 'Applications & URL Filtering'
+# blade enabled and (b) Track granularity 'Per Session' -- otherwise publish fails
+# 409. List here the service names your policy actually uses as APPLICATIONS: only
+# rules referencing one of these get 'Per Session'; every other (L3/L4) rule keeps
+# plain Log. To find them in SmartConsole, double-click the object in a rule's
+# Service & Applications column -- application objects show type 'Application'.
+# rdp is the usual culprit in AD/RDP environments; trim or extend to match.
+cp_application_services:
+  - rdp
+  - sip
+  - h323
+  - rtsp
+  - ica
+
 # --- Defaults applied to created objects -------------------------------------
 cp_default_color: "black"
 

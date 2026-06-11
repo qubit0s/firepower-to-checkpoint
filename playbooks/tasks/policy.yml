@@ -58,9 +58,11 @@
     service: "{{ item.service | map('replace', 'icmp-proto', cp_icmp_service) | list }}"
     track:
       type: "{{ cp_rule_track | default('Log') }}"
-      # 'Session' granularity is mandatory when a rule carries an application or
-      # content-type with Track=Log; harmless (one log per session) otherwise.
-      per_session: "{{ cp_rule_track_per_session | default(true) | bool }}"
+      # 'Session' granularity is REQUIRED only when a rule carries an application
+      # or content-type with Track=Log. Apply it solely to rules whose service
+      # list includes an application-resolving name (cp_application_services);
+      # every other (L3/L4) rule keeps plain Log -- no per-session/per-connection.
+      per_session: "{{ (item.service | intersect(cp_application_services | default([]))) | length > 0 }}"
     enabled: "{{ item.enabled | default(true) }}"
     comments: "{{ item.comments | default('') }}"
     state: present
