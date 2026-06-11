@@ -22,6 +22,26 @@
   register: r_packages
   ignore_errors: true
 
+# The auto-created "<package> Network" layer is L3/L4 only by default. Some
+# migrated rules reference Check Point built-ins that resolve to Application/Site
+# objects (e.g. rdp, sip, h323), which makes the publish validator reject the
+# layer ("'Service & Applications' column cannot contain applications until the
+# 'Applications & URL Filtering' option has been selected in the layer's
+# properties"). Enable the blade so those rules validate. Controlled by
+# cp_layer_apps_url_filtering (default true); set false to keep layers L3/L4.
+- name: "Enable Applications & URL Filtering on each package's layer"
+  check_point.mgmt.cp_mgmt_access_layer:
+    name: "{{ item.name }} Network"
+    applications_and_url_filtering: true
+    state: present
+    ignore_warnings: true
+  loop: "{{ cp_packages | default([]) }}"
+  loop_control:
+    label: "{{ item.name }} Network"
+  register: r_layers
+  ignore_errors: true
+  when: cp_layer_apps_url_filtering | default(true) | bool
+
 - name: Create access rules (in ACL order, into each package's layer)
   check_point.mgmt.cp_mgmt_access_rule:
     layer: "{{ item.layer }}"
@@ -38,6 +58,9 @@
     service: "{{ item.service | map('replace', 'icmp-proto', cp_icmp_service) | list }}"
     track:
       type: "{{ cp_rule_track | default('Log') }}"
+      # 'Session' granularity is mandatory when a rule carries an application or
+      # content-type with Track=Log; harmless (one log per session) otherwise.
+      per_session: "{{ cp_rule_track_per_session | default(true) | bool }}"
     enabled: "{{ item.enabled | default(true) }}"
     comments: "{{ item.comments | default('') }}"
     state: present
@@ -54,6 +77,7 @@
     stage_name: "4_policy"
     task_results:
       - "{{ r_packages }}"
+      - "{{ r_layers | default({}) }}"
       - "{{ r_rules }}"
 
 - name: "Publish session after this stage (when cp_publish=true)"
