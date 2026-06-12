@@ -1268,6 +1268,14 @@ class Converter:
             "cp_access_rules": self.rules,
         }
         nat = {"cp_nat_rules": self.nat_rules}
+        # A Check Point policy package holds Access, NAT and Threat Prevention
+        # together, so NAT belongs in the SAME package as the access rules -- not a
+        # separate one. Emit cp_nat_package = the primary (first) converted package
+        # name; loaded via vars/5_nat.yml it overrides the group_vars 'Standard'
+        # fallback. (NAT is global per package; with multiple ACLs the primary
+        # package -- the global ACL -- carries it.)
+        if self.packages:
+            nat["cp_nat_package"] = next(iter(self.packages))
 
         written = [
             self._dump(out_dir, "1_objects.yml", objects),

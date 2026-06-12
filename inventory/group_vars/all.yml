@@ -18,7 +18,11 @@
 #   ./2_parse.sh <config> --acls NAME1,NAME2     # which ACLs (default: global ACL)
 #   ./2_parse.sh <config> --package "DC1-Policy" # override the package name
 #
-# Policy package that migrated NAT rules are written into.
+# Policy package that migrated NAT rules are written into. A Check Point package
+# holds Access, NAT and Threat Prevention together, so NAT should live in the SAME
+# package as the access policy. The parser now emits cp_nat_package into
+# vars/5_nat.yml (set to the package named via --package), which overrides this
+# value. This "Standard" is only a fallback for vars files parsed before that.
 cp_nat_package: "Standard"
 # Track setting for every migrated access rule (Log / None / Extended Log / Detailed Log).
 cp_rule_track: "Log"
